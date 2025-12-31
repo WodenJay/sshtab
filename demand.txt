@@ -1,0 +1,376 @@
+```text
+# sshtab（暂定名）——“ssh + Tab 选最近连接”的 Bash-only 工具设计说明（C++ 实现）
+交付目标：这份说明交给 Codex 后，可直接据此完成架构设计与实现。
+
+---
+
+## 0. 需求复述（必须满足）
+你希望在 Bash 里：
+1) 只要用户在终端输入 `ssh`（或 `ssh `）后按 Tab
+2) 终端弹出一个交互式列表（按“最近使用”排序）
+3) 用户可用 ↑/↓ 选择、Enter 确认
+4) 确认后把“完整 ssh 命令”填回到当前命令行（而不是立即执行），用户还可以继续编辑
+5) 仅当用户执行 `ssh xxx` 且成功（退出码为 0）时，才记录这条完整命令
+6) Bash 优先；其他 shell 暂不适配
+7) 开箱即用：下载即可用，不要求用户手动改配置文件（安装脚本可以自动注入）
+
+---
+
+## 1. 核心难点与关键取舍（务必理解）
+### 1.1 为什么不能用“普通 Bash completion 直接插入整条命令行”
+Bash programmable completion 的 COMPREPLY 是“补全当前单词”，而不是“替换整行”。
+如果补全结果含空格，Bash 会将空格转义，导致被当作一个参数或无效命令，无法得到“整条命令行直接回填”的效果。
+
+### 1.2 满足“ssh + Tab 回填整条命令”的可行方案（本设计采用）
+采用“可用且稳”的组合：
+A) 用 Bash completion 触发“选择器”
+B) completion 只回填 **一个** 参数：把整条 ssh 参数串作为“单个字符串参数”，例如：
+   用户按 Tab 后命令行变为：
+   ssh 'user@host -p 2222 -J jump'
+C) 用 Bash 中的 `ssh()` 函数做轻量代理：
+   - 若 `ssh` 接收到“单个且包含空格的参数”，则交给 C++ 程序 `sshtab exec "<参数串>"` 做安全解析后 exec 真正的 /usr/bin/ssh
+   - 否则正常透传到系统 ssh（`command /usr/bin/ssh "$@"`）
+
+这样可以：
+- Tab 触发交互选择 ✅
+- 选择后回填到当前命令行且可编辑 ✅（编辑引号内内容）
+- 运行时仍然是 ssh 命令 ✅（只是被 shell function 代理）
+- 不依赖改 Tab 键全局绑定 ✅（不破坏其他补全）
+
+注意：用户看到的命令会是 `ssh '...'` 形式；这仍然显示了完整的 ssh 参数串（满足“展示完整 ssh 命令”的需求）。
+
+---
+
+## 2. 用户体验（UX）定义
+### 2.1 触发方式
+- 当用户输入：
+  - `ssh<Tab>` 或 `ssh <Tab>`（两者都应支持）
+- 触发交互选择器（全屏/半屏 TUI 均可）
+
+### 2.2 选择器交互
+- 默认展示最近 N 条（建议 N=50，可配置）
+- 键位：
+  - ↑/↓：移动选择
+  - Enter：确认
+  - Esc / Ctrl+C：取消（不改变当前命令行）
+  - 可选增强：输入字符进行模糊过滤；Backspace 删除过滤字符
+- 每条显示内容：完整 ssh 命令（建议高亮匹配/选中项可选）
+
+### 2.3 回填规则
+- 选中历史记录的“完整命令”为例如：`ssh -p 2222 user@host -J jump`
+- 回填到命令行应变成：
+  - `ssh '<去掉前缀ssh后的参数串>'`
+  - 即：`ssh '-p 2222 user@host -J jump'`
+- 回填必须保证：
+  - 引号安全（内部含单引号时要正确转义或改用 $'...'）
+  - 允许用户继续编辑后再 Enter 执行
+
+---
+
+## 3. 记录策略（方案二：从用户输入中提取 + 仅成功时记录）
+### 3.1 “仅成功才记录”的 Bash hook 设计（两阶段）
+在交互式 Bash 中注入两个 hook：
+1) pre-exec：命令执行前捕获本次输入是否为 ssh
+2) post-exec：命令执行后检查 `$?`，若为 0 且 pre-exec 捕获到了 ssh，则落库
+
+可用机制（建议实现路径）：
+- 使用 `trap '...' DEBUG` 捕获“将要执行的命令”（pre）
+- 使用 `PROMPT_COMMAND` 在每条命令执行结束后运行（post），此时 `$?` 是上一条命令的退出码
+
+关键点：
+- 必须有“防重入 guard”，避免记录器自身触发 trap
+- 必须只在交互式 shell 启用（`[[ $- == *i* ]]`）
+
+### 3.2 捕获的“ssh 命令字符串”应尽量贴近用户输入
+- 若用户执行的是：
+  - `ssh user@host -p 2222`
+  - 或通过本工具回填的：`ssh '-p 2222 user@host'`
+- 记录时应规范化为“无外层引号”的标准展示形式：
+  - `ssh -p 2222 user@host`
+规范化可由 C++ 记录器完成（更一致），Bash 只负责把“原始命令字符串 + exit code”交给二进制。
+
+---
+
+## 4. 数据存储与排序（推荐 append-only + 运行时去重）
+### 4.1 存储位置（XDG）
+- 数据目录：
+  `${XDG_DATA_HOME:-$HOME/.local/share}/sshtab/`
+- 主记录文件：
+  `${DATA_DIR}/history.log`
+
+### 4.2 文件格式（建议：TSV + Base64，解析简单且鲁棒）
+每行一条记录（append-only）：
+- epoch_seconds<TAB>exit_code<TAB>base64(command_utf8)<LF>
+
+说明：
+- command_utf8 是“规范化后的完整 ssh 命令”，例如：`ssh -p 2222 user@host`
+- 即使未来扩展字段，也可兼容（新增列）
+
+### 4.3 展示时的去重与排序策略（v1）
+读取 history.log 后构建“最近列表”：
+- 按时间从新到旧扫描
+- 用哈希表按 command 去重（保留最新一次）
+- 得到唯一列表后：
+  - 主排序：last_used desc
+  - 次排序：count desc（可选：在扫描时统计频次）
+- 返回前 N 条供选择器展示
+
+### 4.4 可选：垃圾回收（v2）
+提供子命令 `sshtab gc`：
+- 生成 compact 文件（每条唯一 command 一行 + count + last_used）
+- 替换 history.log（或另存为 db 文件）
+
+---
+
+## 5. C++ 二进制功能分解（子命令接口）
+二进制名：`sshtab`（建议）
+
+### 5.1 子命令：record（由 bash hook 调用）
+用途：记录“成功的 ssh 命令”
+输入：
+- 原始命令字符串（从 hook 取到）
+- 退出码 exit_code
+行为：
+1) 判断是否为 ssh 命令（必须严格：以 `ssh` 为命令名）
+2) 若 exit_code != 0：直接忽略（不记录）
+3) 规范化命令字符串：
+   - 去掉多余空格
+   - 若形如 `ssh '...参数串...'` 或 `ssh "..."`
+     -> 展开为 `ssh <参数串>`
+   - 保证最终 command 以 `ssh ` 开头
+4) append 写入 history.log
+并发：
+- 使用文件锁（fcntl/flock 皆可）保证多终端写入安全
+
+CLI 建议：
+- `sshtab record --exit-code <int> --raw "<raw_cmd_string>"`
+
+### 5.2 子命令：list（供调试/可选给 completion 使用）
+用途：输出最近 N 条唯一 ssh 命令（纯文本）
+- `sshtab list --limit 50`
+输出示例：
+ssh -p 2222 user@host
+ssh user2@host2
+...
+
+### 5.3 子命令：pick（交互选择器）
+用途：在 /dev/tty 上显示交互列表并返回选中项
+- `sshtab pick --limit 50`
+行为：
+1) 读取并生成唯一 recent 列表（同 4.3）
+2) 进入 TUI（termios raw mode）
+3) 用户选择后，将“参数串（不含前缀 ssh）”输出到 stdout
+   - 输出仅一行，供 bash completion 捕获
+输出示例（stdout）：
+-p 2222 user@host -J jump
+
+注意：
+- pick 的交互必须绑定到 /dev/tty（输入输出），避免污染 stdout
+- stdout 只输出最终结果（方便脚本捕获）
+- 若取消，stdout 输出空并以非 0 退出
+
+### 5.4 子命令：exec（安全执行）
+用途：执行 `ssh "<参数串>"` 这种“单字符串参数形式”的命令
+- `sshtab exec "<args_string>"`
+行为：
+1) 将 args_string 按“shell-like tokenization”解析为 argv（仅解析空格/引号/反斜杠）
+2) 构造 argv = ["/usr/bin/ssh", tokens...]
+3) 使用 execvp/execv 直接替换进程（不使用 /bin/sh，不 eval）
+安全要求：
+- 不解释 `; | & > < $( )` 等 shell 语义；它们仅当作普通字符（或直接拒绝包含这些字符以更安全）
+- 推荐：若检测到明显的 shell 元字符（;|&`$()<>），直接报错并退出非 0
+  （因为用户编辑引号内字符串时可能误输入，安全第一）
+
+---
+
+## 6. Bash 集成细节（安装脚本自动注入，用户无需手改）
+安装目标：
+- 注入 `ssh()` 代理函数
+- 注入 DEBUG trap + PROMPT_COMMAND 记录逻辑
+- 注入 `complete -F` 对 ssh 的 Tab 补全函数（仅在合适语境触发 pick）
+
+### 6.1 ssh() 代理函数行为规范（必须）
+语义：
+- 正常情况（用户平时 ssh 用法）不受影响
+- 仅当用户调用形如：`ssh "<包含空格的单个参数串>"` 时，走 `sshtab exec`
+判定建议：
+- if [[ $# -eq 1 && "$1" == *" "* ]]; then
+    sshtab exec "$1"
+  else
+    command /usr/bin/ssh "$@"
+  fi
+注意：
+- 必须使用 `command` 调用真实 ssh，避免递归
+- 必须允许用户传入正常单参数（例如 `ssh user@host`）直接走真实 ssh
+
+### 6.2 记录 hook（只记录成功）
+伪流程（bash 逻辑描述）：
+- DEBUG trap：
+  - 若处于 guard 状态（例如环境变量 SSHTAB_GUARD=1），return
+  - 取当前即将执行的命令字符串（BASH_COMMAND）
+  - 若该命令以 `ssh` 开头（命令名匹配），将其保存到 `_SSHTAB_PENDING_RAW`
+- PROMPT_COMMAND：
+  - 获取上一条命令 exit_code=$?
+  - 若 `_SSHTAB_PENDING_RAW` 非空：
+    - 调用 `sshtab record --exit-code $exit_code --raw "$_SSHTAB_PENDING_RAW"`
+    - 清空 `_SSHTAB_PENDING_RAW`
+  - 注意 guard，避免 `sshtab record` 自己触发 DEBUG trap 造成误捕获
+
+### 6.3 completion：只在“用户要选最近”时触发
+你希望 `ssh + Tab` 列出最近命令，而不是破坏 ssh 的正常补全（host/known_hosts 等）。
+因此 completion 触发条件要严格，建议仅在以下场景触发 pick：
+- 用户刚输入 `ssh`，正在补全第一个参数位置
+- 且当前参数为空（即光标在 `ssh` 后面、还没输入 host）
+
+判断条件（bash completion 通用变量）：
+- COMP_WORDS, COMP_CWORD, COMP_LINE, COMP_POINT
+推荐触发：
+- 当 COMP_CWORD == 1 且当前 word 为空时
+  - 执行 `sshtab pick` 获取用户选中项 args_string
+  - 将其包装为“单词补全”：加单引号或 $'...'
+  - COMPREPLY=( "<quoted_args_string>" )
+  - 设置 compopt -o nospace（避免自动加空格）
+
+重要：COMPREPLY 只能替换当前 word，因此我们回填的是一个“单参数字符串”（带引号），由 ssh() 代理函数负责执行。
+
+---
+
+## 7. 交互选择器（TUI）实现建议（无外部依赖）
+目标：避免依赖 fzf/peco；发布一个二进制即可用。
+
+### 7.1 终端 IO 约束
+- 交互输入输出使用 /dev/tty
+- stdout 仅输出最终选择结果（方便 completion 捕获）
+- stderr 用于错误信息（非交互）
+
+### 7.2 termios raw mode
+- 进入 raw mode，读取按键序列
+- 处理：
+  - 方向键通常是 ESC [ A/B（Up/Down）
+  - Enter 是 \n 或 \r
+  - Backspace 可能是 127 或 8
+  - Esc 是 27
+
+### 7.3 UI 形态（简化即可）
+- 在当前光标位置下方绘制列表（或清屏绘制）
+- 选中项高亮（ANSI 反色即可）
+- 顶部显示过滤关键词（可选）
+- 退出时恢复终端状态（raw -> cooked），清理绘制区域
+
+### 7.4 过滤（强烈建议 v1 就做）
+- 用户键入字符：filter += char
+- 实时用简单子串匹配或模糊匹配过滤命令列表
+- 显示过滤后的 top K
+
+---
+
+## 8. 安装/卸载（“开箱即用”的关键）
+### 8.1 分发形态
+- GitHub Release 提供预编译二进制：
+  - sshtab-linux-x86_64
+  - （可选）sshtab-linux-aarch64
+- 同时提供 install.sh：
+  - 下载/复制二进制到 ~/.local/bin/sshtab
+  - 自动修改 ~/.bashrc（插入一段带标记的 snippet）
+  - 创建补全脚本到 ~/.bash_completion.d/sshtab（或 ~/.config/sshtab/）
+  - 提示用户 `source ~/.bashrc` 或重开终端
+
+### 8.2 bashrc 注入必须“幂等”
+插入块必须带明确 begin/end 标记，便于卸载：
+- # >>> sshtab begin >>>
+- ...（ssh 函数、hook、completion source）
+- # <<< sshtab end <<<
+
+安装器：
+- 若检测到标记已存在，不重复插入
+- 若 ~/.bashrc 不存在则创建
+
+### 8.3 卸载脚本 uninstall.sh
+- 删除 bashrc 中的标记块
+- 删除 ~/.local/bin/sshtab
+- 删除数据目录（可询问参数：--keep-data）
+
+---
+
+## 9. 安全与边界情况（必须明确）
+### 9.1 exec 子命令必须避免 eval 与 shell 注入
+- 不允许通过 args_string 执行任意 shell 语句
+- 建议直接拒绝包含以下字符的 args_string：
+  `; | & ` $ ( ) < >`
+- 解析只允许：空格、引号（' "）、反斜杠转义
+- execv 只调用 /usr/bin/ssh
+
+### 9.2 记录逻辑避免误记录
+- 只记录真正的 ssh 调用：
+  - 命令名必须是 ssh（而不是 echo ssh ...）
+- 避免记录 sshtab 自己产生的 ssh（如果未来扩展）
+- 多终端并发写：必须加锁
+
+### 9.3 性能
+- pick/list 读取文件可能增长：v1 通过“从尾部扫描最近 M 行”优化
+  - 可实现：读取文件末尾若干 KB/MB，解析足够多记录后停止
+- 选择器启动要快：尽量不做重型 JSON 解析
+
+---
+
+## 10. 可测试性要求（给 Codex 的测试任务）
+### 10.1 单元测试（建议）
+- history.log 解析（正确/错误行）
+- base64 编解码
+- 规范化逻辑（ssh '...' -> ssh ...）
+- args_string tokenizer（含引号/转义）
+- 元字符拒绝策略
+
+### 10.2 集成测试（建议）
+- Docker/CI 中启动 bash，source 注入脚本
+- 模拟执行 ssh（可用一个假 ssh 脚本替代 /usr/bin/ssh），验证：
+  - exit_code=0 时记录
+  - exit_code!=0 不记录
+- 模拟 pick 输出并验证 completion 回填逻辑（可用非交互模式：sshtab pick --non-interactive --select 0）
+
+---
+
+## 11. 版本规划（建议）
+### v1（最小可用）
+- record + list + pick（基本上下选择）+ exec（安全解析）
+- bash 安装器（注入 ssh function + hooks + completion）
+- 去重 + 最近排序
+
+### v1.1（体验增强）
+- 过滤搜索
+- 显示 last_used 时间/频次（UI 左侧小字段）
+- `sshtab doctor`：检查 bash 注入是否生效、/usr/bin/ssh 是否存在、数据目录权限等
+
+### v2（维护性）
+- gc 压缩
+- 更强 tokenizer（兼容更多 ssh 参数组合）
+- 统计/导出
+
+---
+
+## 12. 交付物清单（Codex 实现应产出）
+1) C++ 源码（推荐结构）：
+   - src/main.cpp（命令分发）
+   - src/history.{h,cpp}
+   - src/normalize.{h,cpp}
+   - src/tokenize.{h,cpp}
+   - src/tui.{h,cpp}
+2) scripts/install.sh
+3) scripts/uninstall.sh
+4) bash/sshtab.bash（completion + hook + ssh function 的 snippet，供 install 注入）
+5) README.md（含“一条命令安装”“如何使用”“如何卸载”“安全说明”）
+6) GitHub Actions：构建 release 二进制（x86_64 必做）
+
+---
+
+## 13. 最重要的“验收标准”（完成度判断）
+- [ ] 新终端打开后，输入 `ssh` + Tab，会弹出列表（无需用户自己改文件）
+- [ ] 选择一条后，命令行回填为 `ssh '<参数串>'`，用户可编辑
+- [ ] Enter 执行后，确实连上 ssh（通过 sshtab exec -> /usr/bin/ssh）
+- [ ] 仅当 exit code=0 时，命令被记录到 history.log
+- [ ] 多次连接后，列表按最近使用排序，且去重
+- [ ] 不破坏 bash 其他命令的 Tab 补全
+- [ ] 卸载脚本可完全恢复（bashrc 清理 + 二进制删除）
+
+（完）
+```
