@@ -1,6 +1,7 @@
 #include "history.h"
 #include "normalize.h"
 #include "tokenize.h"
+#include "tui.h"
 
 #include <cerrno>
 #include <cstdlib>
@@ -155,32 +156,61 @@ int CommandPick(int argc, char** argv) {
     }
   }
 
-  if (!non_interactive) {
-    std::cerr << "interactive pick not implemented in milestone 1\n";
-    return 2;
-  }
-
-  if (select_idx < 0) {
-    std::cerr << "--select is required in --non-interactive mode\n";
-    return 1;
-  }
-
   std::string err;
   std::vector<HistoryEntry> entries = LoadRecentUnique(limit, &err);
-  if (entries.empty()) {
-    return 1;
+  std::vector<PickItem> items;
+  items.reserve(entries.size());
+  for (const auto& entry : entries) {
+    if (HasControlChars(entry.command)) {
+      continue;
+    }
+    std::string args = ExtractArgsFromCommand(entry.command);
+    if (args.empty() || HasControlChars(args)) {
+      continue;
+    }
+    PickItem item;
+    item.display = entry.command;
+    item.args = args;
+    items.push_back(item);
   }
-  if (static_cast<std::size_t>(select_idx) >= entries.size()) {
+
+  if (items.empty()) {
     return 1;
   }
 
-  std::string args = ExtractArgsFromCommand(entries[select_idx].command);
-  if (HasControlChars(args)) {
-    return 1;
+  if (non_interactive) {
+    if (select_idx < 0) {
+      std::cerr << "--select is required in --non-interactive mode\n";
+      return 1;
+    }
+    if (static_cast<std::size_t>(select_idx) >= items.size()) {
+      return 1;
+    }
+    const std::string& args = items[select_idx].args;
+    if (HasControlChars(args)) {
+      return 1;
+    }
+    std::cout << args << "\n";
+    return 0;
   }
 
-  std::cout << args << "\n";
-  return 0;
+  std::size_t selected = 0;
+  PickResult result = RunPickTui(items, &selected, &err);
+  if (result == PickResult::kSelected) {
+    if (selected >= items.size()) {
+      return 1;
+    }
+    const std::string& args = items[selected].args;
+    if (HasControlChars(args)) {
+      return 1;
+    }
+    std::cout << args << "\n";
+    return 0;
+  }
+  if (result == PickResult::kError && !err.empty()) {
+    std::cerr << "pick failed: " << err << "\n";
+  }
+  return 1;
 }
 
 int CommandExec(int argc, char** argv) {

@@ -127,7 +127,7 @@ __sshtab_complete() {
   fi
 
   local args
-  args=$(sshtab pick --limit "${SSHTAB_LIMIT}" --non-interactive --select 0 2>/dev/null) || {
+  args=$(sshtab pick --limit "${SSHTAB_LIMIT}" 2>/dev/null) || {
     COMPREPLY=()
     if [[ ${SSHTAB_COMPLETION_MODE} == "fallback" ]]; then
       __sshtab_call_prev_completion
