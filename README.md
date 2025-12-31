@@ -46,13 +46,13 @@ g++ -std=c++17 -O2 -Wall -Wextra -pedantic src/*.cpp -o sshtab
 远程安装卸载（可选）：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/<OWNER>/<REPO>/main/scripts/uninstall-remote.sh | bash
+curl -fsSL https://raw.githubusercontent.com/WodenJay/sshtab/main/scripts/uninstall-remote.sh | bash
 ```
 
 删除历史记录：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/<OWNER>/<REPO>/main/scripts/uninstall-remote.sh | bash -s -- --purge
+curl -fsSL https://raw.githubusercontent.com/WodenJay/sshtab/main/scripts/uninstall-remote.sh | bash -s -- --purge
 ```
 
 卸载后建议执行 `source ~/.bashrc` 或重开终端。
