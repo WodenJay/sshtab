@@ -1,6 +1,6 @@
 # sshtab
 
-Bash 下 `ssh + Tab` 选择最近连接并回填命令的工具。
+Bash 下 `ssh <Tab>` 选择最近连接并回填命令的工具。
 
 ## 一行命令安装（curl|bash）
 
@@ -69,3 +69,7 @@ curl -fsSL https://raw.githubusercontent.com/WodenJay/sshtab/main/scripts/uninst
 
 - `exec` 不使用 eval/system，仅做最小 tokenization 后 exec 真正 ssh。
 - 拒绝控制字符与明显 shell 元字符（`; | & \` $ ( ) < >`）。
+
+## Acknowledge
+
+代码由codex编写
