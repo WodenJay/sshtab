@@ -2,13 +2,12 @@
 
 Bash 下 `ssh + Tab` 选择最近连接并回填命令的工具。
 
-## 安装
+## 一行命令安装（curl|bash）
 
-### 方式一：本地构建安装
+将下方 `<OWNER>/<REPO>` 替换为你的 GitHub 仓库地址：
 
 ```bash
-g++ -std=c++17 -O2 -Wall -Wextra -pedantic src/*.cpp -o sshtab
-./scripts/install.sh
+curl -fsSL https://raw.githubusercontent.com/<OWNER>/<REPO>/main/scripts/install-remote.sh | bash
 ```
 
 安装后执行：
@@ -19,11 +18,10 @@ source ~/.bashrc
 
 或重新打开终端。
 
-### 方式二：Release 二进制（TODO）
-
-从 Release 下载对应平台的 `sshtab` 二进制，放到仓库根目录后执行：
+## 安装（本地构建）
 
 ```bash
+g++ -std=c++17 -O2 -Wall -Wextra -pedantic src/*.cpp -o sshtab
 ./scripts/install.sh
 ```
 
@@ -35,6 +33,8 @@ source ~/.bashrc
 
 ## 卸载
 
+本地安装卸载：
+
 ```bash
 ./scripts/uninstall.sh
 ```
@@ -45,6 +45,18 @@ source ~/.bashrc
 ./scripts/uninstall.sh --purge
 ```
 
+远程安装卸载（可选）：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/<OWNER>/<REPO>/main/scripts/uninstall-remote.sh | bash
+```
+
+删除历史记录：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/<OWNER>/<REPO>/main/scripts/uninstall-remote.sh | bash -s -- --purge
+```
+
 卸载后建议执行 `source ~/.bashrc` 或重开终端。
 
 ## 限制与兼容性
@@ -52,9 +64,19 @@ source ~/.bashrc
 - 仅支持 Bash。
 - 若用户已有 DEBUG trap，工具会降级并禁用记录（仅提示一次）。
 - /dev/tty 不可用时，`pick` 会失败并回退补全。
+- 远程安装默认仅支持 Linux x86_64。
 
 ## 安全说明
 
 - `exec` 不使用 eval/system，仅做最小 tokenization 后 exec 真正 ssh。
 - 拒绝控制字符与明显 shell 元字符（`; | & \` $ ( ) < >`）。
+
+## Release
+
+打 tag 触发 Release：
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
 
