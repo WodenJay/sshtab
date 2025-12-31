@@ -4,6 +4,7 @@
 #include <cstring>
 #include <fcntl.h>
 #include <string>
+#include <sys/ioctl.h>
 #include <termios.h>
 #include <unistd.h>
 
@@ -115,25 +116,59 @@ size_t GetVisibleCount(size_t total) {
   return total < kDefault ? total : kDefault;
 }
 
+size_t GetTerminalWidth(int fd) {
+  struct winsize ws;
+  if (ioctl(fd, TIOCGWINSZ, &ws) == 0 && ws.ws_col > 0) {
+    return static_cast<size_t>(ws.ws_col);
+  }
+  return 80;
+}
+
+std::string TruncateLine(const std::string& text, size_t width) {
+  if (width == 0) {
+    return std::string();
+  }
+  if (text.size() <= width) {
+    return text;
+  }
+  if (width <= 3) {
+    return text.substr(0, width);
+  }
+  return text.substr(0, width - 3) + "...";
+}
+
+void AppendClearedLine(std::string* out, const std::string& text, size_t width, bool highlight) {
+  if (!out) {
+    return;
+  }
+  std::string line = TruncateLine(text, width);
+  out->append("\r\x1b[2K");
+  if (highlight) {
+    out->append("\x1b[7m");
+  }
+  out->append(line);
+  if (highlight && line.size() < width) {
+    out->append(width - line.size(), ' ');
+  }
+  if (highlight) {
+    out->append("\x1b[0m");
+  }
+  out->append("\n");
+}
+
 bool Draw(int fd, const std::vector<PickItem>& items, size_t selected, size_t offset) {
+  const size_t width = GetTerminalWidth(fd);
   std::string out;
   out += "\x1b[2J\x1b[H";
-  out += "sshtab pick (Enter select, Esc/Ctrl+C cancel)\n";
+  AppendClearedLine(&out, "sshtab pick (Enter select, Esc/Ctrl+C cancel)", width, false);
   size_t visible = GetVisibleCount(items.size());
   for (size_t i = 0; i < visible; ++i) {
     size_t idx = offset + i;
     if (idx >= items.size()) {
-      out += "\n";
+      AppendClearedLine(&out, "", width, false);
       continue;
     }
-    if (idx == selected) {
-      out += "\x1b[7m";
-    }
-    out += items[idx].display;
-    if (idx == selected) {
-      out += "\x1b[0m";
-    }
-    out += "\n";
+    AppendClearedLine(&out, items[idx].display, width, idx == selected);
   }
   return WriteAll(fd, out);
 }
