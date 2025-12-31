@@ -42,10 +42,11 @@ bool ReadByte(int fd, char* out) {
   }
 }
 
-struct TermiosGuard {
+struct TerminalUiGuard {
   int fd = -1;
   termios orig{};
-  bool active = false;
+  bool raw_active = false;
+  bool screen_active = false;
 
   bool EnableRaw(std::string* err) {
     if (tcgetattr(fd, &orig) != 0) {
@@ -67,23 +68,35 @@ struct TermiosGuard {
       }
       return false;
     }
-    active = true;
+    raw_active = true;
     return true;
   }
 
-  ~TermiosGuard() {
-    if (active) {
+  bool EnterScreen(std::string* err) {
+    std::string seq;
+    seq += "\x1b[?1049h";
+    seq += "\x1b[H\x1b[2J";
+    seq += "\x1b[?25l";
+    if (!WriteAll(fd, seq)) {
+      if (err) {
+        *err = std::string("tty write failed: ") + std::strerror(errno);
+      }
+      return false;
+    }
+    screen_active = true;
+    return true;
+  }
+
+  ~TerminalUiGuard() {
+    if (raw_active) {
       tcsetattr(fd, TCSAFLUSH, &orig);
     }
-  }
-};
-
-struct CursorGuard {
-  int fd = -1;
-  bool hidden = false;
-  ~CursorGuard() {
-    if (hidden) {
-      WriteAll(fd, "\x1b[?25h");
+    if (screen_active) {
+      std::string seq;
+      seq += "\x1b[?25h";
+      seq += "\x1b[0m";
+      seq += "\x1b[?1049l";
+      WriteAll(fd, seq);
     }
   }
 };
@@ -149,16 +162,14 @@ PickResult RunPickTui(const std::vector<PickItem>& items, std::size_t* index, st
   FdGuard fd_guard;
   fd_guard.fd = fd;
 
-  TermiosGuard term;
+  TerminalUiGuard term;
   term.fd = fd;
   if (!term.EnableRaw(err)) {
     return PickResult::kError;
   }
-
-  CursorGuard cursor;
-  cursor.fd = fd;
-  cursor.hidden = true;
-  WriteAll(fd, "\x1b[?25l");
+  if (!term.EnterScreen(err)) {
+    return PickResult::kError;
+  }
 
   size_t selected = 0;
   size_t offset = 0;
@@ -173,29 +184,24 @@ PickResult RunPickTui(const std::vector<PickItem>& items, std::size_t* index, st
     }
 
     if (c == 0x03) {
-      WriteAll(fd, "\x1b[2J\x1b[H");
       return PickResult::kCanceled;
     }
 
     if (c == '\r' || c == '\n') {
       *index = selected;
-      WriteAll(fd, "\x1b[2J\x1b[H");
       return PickResult::kSelected;
     }
 
     if (c == 0x1b) {
       char next = 0;
       if (!ReadByte(fd, &next)) {
-        WriteAll(fd, "\x1b[2J\x1b[H");
         return PickResult::kCanceled;
       }
       if (next != '[') {
-        WriteAll(fd, "\x1b[2J\x1b[H");
         return PickResult::kCanceled;
       }
       char code = 0;
       if (!ReadByte(fd, &code)) {
-        WriteAll(fd, "\x1b[2J\x1b[H");
         return PickResult::kCanceled;
       }
       if (code == 'A') {
