@@ -4,10 +4,8 @@ Bash 下 `ssh + Tab` 选择最近连接并回填命令的工具。
 
 ## 一行命令安装（curl|bash）
 
-将下方 `<OWNER>/<REPO>` 替换为你的 GitHub 仓库地址：
-
 ```bash
-curl -fsSL https://raw.githubusercontent.com/<OWNER>/<REPO>/main/scripts/install-remote.sh | bash
+curl -fsSL https://raw.githubusercontent.com/WodenJay/sshtab/main/scripts/install-remote.sh | bash
 ```
 
 安装后执行：
@@ -70,13 +68,3 @@ curl -fsSL https://raw.githubusercontent.com/<OWNER>/<REPO>/main/scripts/uninsta
 
 - `exec` 不使用 eval/system，仅做最小 tokenization 后 exec 真正 ssh。
 - 拒绝控制字符与明显 shell 元字符（`; | & \` $ ( ) < >`）。
-
-## Release
-
-打 tag 触发 Release：
-
-```bash
-git tag v0.1.0
-git push origin v0.1.0
-```
-

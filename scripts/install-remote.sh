@@ -98,4 +98,4 @@ case ":${PATH}:" in
  esac
 
 echo "sshtab installed. Run: source ~/.bashrc (or restart your shell)"
-echo "Type ssh<Tab> to use sshtab."
+echo "Type ssh <Tab> to use sshtab."
