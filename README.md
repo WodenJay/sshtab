@@ -63,6 +63,7 @@ curl -fsSL https://raw.githubusercontent.com/<OWNER>/<REPO>/main/scripts/uninsta
 - 若用户已有 DEBUG trap，工具会降级并禁用记录（仅提示一次）。
 - /dev/tty 不可用时，`pick` 会失败并回退补全。
 - 远程安装默认仅支持 Linux x86_64。
+- 预编译二进制基于 ubuntu-22.04 构建，兼容性更广；如仍遇到 glibc 过旧问题，请使用本地源码构建。
 
 ## 安全说明
 

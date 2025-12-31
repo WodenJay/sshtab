@@ -10,13 +10,13 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
 
       - name: Build
         run: |
-          g++ -std=c++17 -O2 -Wall -Wextra -pedantic src/*.cpp -o sshtab
+          g++ -std=c++17 -O2 -Wall -Wextra -pedantic src/*.cpp -o sshtab -static-libstdc++ -static-libgcc
           mv sshtab sshtab-linux-x86_64
           sha256sum sshtab-linux-x86_64 > sha256sums.txt
 

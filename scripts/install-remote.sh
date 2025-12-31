@@ -65,6 +65,12 @@ mkdir -p "${BIN_DIR}"
 cp "${TMP_DIR}/sshtab-linux-x86_64" "${BIN_DIR}/sshtab"
 chmod 0755 "${BIN_DIR}/sshtab"
 
+smoke_out=$("${BIN_DIR}/sshtab" list --limit 1 2>&1 || true)
+if echo "${smoke_out}" | grep -q 'GLIBC_\\|GLIBCXX_'; then
+  echo "sshtab: binary is not compatible with this system (${smoke_out})" >&2
+  exit 1
+fi
+
 SNIPPET_DIR="${XDG_DATA_HOME:-${HOME}/.local/share}/sshtab"
 mkdir -p "${SNIPPET_DIR}"
 SNIPPET_PATH="${SNIPPET_DIR}/sshtab.bash"
