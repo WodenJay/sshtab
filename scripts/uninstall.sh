@@ -21,9 +21,9 @@ MARK_END="# <<< sshtab end <<<"
 if [[ -f "${BASHRC}" ]]; then
   tmp=$(mktemp)
   awk -v begin="${MARK_BEGIN}" -v end="${MARK_END}" '
-    $0 == begin {in=1; next}
-    $0 == end {in=0; next}
-    in!=1 {print}
+    $0 == begin {flag=1; next}
+    $0 == end {flag=0; next}
+    !flag {print}
   ' "${BASHRC}" > "${tmp}"
   mv "${tmp}" "${BASHRC}"
 fi
