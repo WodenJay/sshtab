@@ -31,8 +31,18 @@ source ~/.bashrc
 ## 安装（本地构建）
 
 ```bash
-g++ -std=c++17 -O2 -Wall -Wextra -pedantic src/*.cpp -o sshtab
+make
 ./scripts/install.sh
+```
+
+构建依赖：
+- g++
+- make
+
+清理构建产物：
+
+```bash
+make clean
 ```
 
 ## 使用方法
