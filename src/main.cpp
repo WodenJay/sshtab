@@ -13,6 +13,13 @@
 
 namespace {
 
+struct SshMeta {
+  std::string host;
+  std::string port;
+  std::string jump;
+  std::string identity;
+};
+
 void PrintUsage() {
   std::cerr << "Usage:\n"
             << "  sshtab record --exit-code <int> --raw <raw_cmd>\n"
@@ -51,6 +58,87 @@ bool ParseSizeArg(const char* arg, std::size_t* out) {
 
 bool HasControlChars(const std::string& s) {
   return ContainsControlChars(s);
+}
+
+std::vector<std::string> SplitArgsSimple(const std::string& args) {
+  std::vector<std::string> out;
+  size_t i = 0;
+  while (i < args.size()) {
+    while (i < args.size() && args[i] == ' ') {
+      ++i;
+    }
+    if (i >= args.size()) {
+      break;
+    }
+    size_t j = i;
+    while (j < args.size() && args[j] != ' ') {
+      ++j;
+    }
+    out.push_back(args.substr(i, j - i));
+    i = j;
+  }
+  return out;
+}
+
+std::string BasenamePath(const std::string& path) {
+  if (path.empty()) {
+    return path;
+  }
+  size_t end = path.size();
+  while (end > 0 && path[end - 1] == '/') {
+    --end;
+  }
+  if (end == 0) {
+    return path;
+  }
+  size_t slash = path.rfind('/', end - 1);
+  if (slash == std::string::npos) {
+    return path.substr(0, end);
+  }
+  return path.substr(slash + 1, end - slash - 1);
+}
+
+SshMeta ExtractSshMeta(const std::string& args) {
+  SshMeta meta;
+  std::vector<std::string> tokens = SplitArgsSimple(args);
+  for (size_t i = 0; i < tokens.size(); ++i) {
+    const std::string& tok = tokens[i];
+    if (tok == "-p") {
+      if (i + 1 < tokens.size()) {
+        meta.port = tokens[++i];
+      }
+      continue;
+    }
+    if (tok.size() > 2 && tok.rfind("-p", 0) == 0) {
+      meta.port = tok.substr(2);
+      continue;
+    }
+    if (tok == "-J") {
+      if (i + 1 < tokens.size()) {
+        meta.jump = tokens[++i];
+      }
+      continue;
+    }
+    if (tok.size() > 2 && tok.rfind("-J", 0) == 0) {
+      meta.jump = tok.substr(2);
+      continue;
+    }
+    if (tok == "-i") {
+      if (i + 1 < tokens.size()) {
+        meta.identity = BasenamePath(tokens[++i]);
+      }
+      continue;
+    }
+    if (tok.size() > 2 && tok.rfind("-i", 0) == 0) {
+      meta.identity = BasenamePath(tok.substr(2));
+      continue;
+    }
+    if (!tok.empty() && tok[0] == '-') {
+      continue;
+    }
+    meta.host = tok;
+  }
+  return meta;
 }
 
 int CommandRecord(int argc, char** argv) {
@@ -177,9 +265,16 @@ int CommandPick(int argc, char** argv) {
     if (args.empty() || HasControlChars(args)) {
       continue;
     }
+    SshMeta meta = ExtractSshMeta(args);
     PickItem item;
     item.display = entry.command;
     item.args = args;
+    item.last_used = entry.last_used;
+    item.count = entry.count;
+    item.host = meta.host;
+    item.port = meta.port;
+    item.jump = meta.jump;
+    item.identity = meta.identity;
     items.push_back(item);
   }
 
@@ -276,9 +371,17 @@ int CommandDelete(int argc, char** argv) {
       if (HasControlChars(entry.command)) {
         continue;
       }
+      std::string args = ExtractArgsFromCommand(entry.command);
+      SshMeta meta = ExtractSshMeta(args);
       PickItem item;
       item.display = entry.command;
-      item.args = entry.command;
+      item.args = args;
+      item.last_used = entry.last_used;
+      item.count = entry.count;
+      item.host = meta.host;
+      item.port = meta.port;
+      item.jump = meta.jump;
+      item.identity = meta.identity;
       items.push_back(item);
       commands.push_back(entry.command);
     }

@@ -2,6 +2,7 @@
 
 #include <cerrno>
 #include <cstring>
+#include <ctime>
 #include <fcntl.h>
 #include <string>
 #include <sys/ioctl.h>
@@ -160,6 +161,39 @@ std::string TruncateLine(const std::string& text, size_t width) {
   return text.substr(0, width - 3) + "...";
 }
 
+std::string FormatRelativeTime(std::int64_t last_used, std::time_t now) {
+  if (last_used <= 0 || now <= 0) {
+    return "?";
+  }
+  long long diff = static_cast<long long>(now) - static_cast<long long>(last_used);
+  if (diff < 0) {
+    diff = 0;
+  }
+  if (diff < 60) {
+    return "now";
+  }
+  if (diff < 3600) {
+    return std::to_string(diff / 60) + "m";
+  }
+  if (diff < 86400) {
+    return std::to_string(diff / 3600) + "h";
+  }
+  if (diff < 604800) {
+    return std::to_string(diff / 86400) + "d";
+  }
+
+  std::time_t ts = static_cast<std::time_t>(last_used);
+  std::tm tm{};
+  if (!localtime_r(&ts, &tm)) {
+    return "?";
+  }
+  char buf[16];
+  if (std::strftime(buf, sizeof(buf), "%Y/%m/%d", &tm) == 0) {
+    return "?";
+  }
+  return std::string(buf);
+}
+
 std::string TrimTitle(const std::string& title) {
   size_t end = title.find('(');
   std::string base = end == std::string::npos ? title : title.substr(0, end);
@@ -169,6 +203,32 @@ std::string TrimTitle(const std::string& title) {
   }
   size_t last = base.find_last_not_of(' ');
   return base.substr(start, last - start + 1);
+}
+
+std::string BuildMetaLine(const PickItem& item) {
+  std::string out;
+  if (!item.host.empty()) {
+    out += "host: " + item.host;
+  }
+  if (!item.port.empty()) {
+    if (!out.empty()) {
+      out += "  ";
+    }
+    out += "p:" + item.port;
+  }
+  if (!item.jump.empty()) {
+    if (!out.empty()) {
+      out += "  ";
+    }
+    out += "J:" + item.jump;
+  }
+  if (!item.identity.empty()) {
+    if (!out.empty()) {
+      out += "  ";
+    }
+    out += "i:" + item.identity;
+  }
+  return out;
 }
 
 void AppendStyledLine(std::string* out,
@@ -187,6 +247,45 @@ void AppendStyledLine(std::string* out,
   out->append(line);
   if (line.size() < inner_width) {
     out->append(inner_width - line.size(), ' ');
+  }
+  out->append(padding, ' ');
+  out->append("\x1b[0m");
+  out->append("\n");
+}
+
+void AppendListLine(std::string* out,
+                    const std::string& left,
+                    const std::string& right,
+                    size_t width,
+                    size_t padding,
+                    const std::string& style) {
+  if (!out) {
+    return;
+  }
+  size_t inner_width = width > padding * 2 ? width - padding * 2 : 0;
+  std::string right_text = right;
+  size_t right_len = right_text.size();
+  size_t gap = right_text.empty() ? 0 : 2;
+  size_t left_max = inner_width;
+  if (right_len + gap <= inner_width) {
+    left_max = inner_width - right_len - gap;
+  } else {
+    right_text.clear();
+    right_len = 0;
+    gap = 0;
+    left_max = inner_width;
+  }
+  std::string left_text = TruncateLine(left, left_max);
+  out->append("\r\x1b[2K");
+  out->append(style);
+  out->append(padding, ' ');
+  out->append(left_text);
+  if (left_text.size() < left_max) {
+    out->append(left_max - left_text.size(), ' ');
+  }
+  if (!right_text.empty()) {
+    out->append(gap, ' ');
+    out->append(right_text);
   }
   out->append(padding, ' ');
   out->append("\x1b[0m");
@@ -223,25 +322,38 @@ bool Draw(int fd,
   std::string rule(width > padding * 2 ? width - padding * 2 : 0, '-');
   AppendStyledLine(&out, rule, width, padding, header_bg + muted);
 
+  std::time_t now = std::time(nullptr);
+  size_t inner_width = width > padding * 2 ? width - padding * 2 : 0;
   for (size_t i = 0; i < visible; ++i) {
     size_t idx = offset + i;
     if (idx >= items.size()) {
       AppendStyledLine(&out, "", width, padding, panel_bg + muted);
       continue;
     }
+    const PickItem& item = items[idx];
     std::string prefix = idx == selected ? "> " : "  ";
-    std::string line = prefix + items[idx].display;
+    std::string line = prefix + item.display;
+    std::string time_text = FormatRelativeTime(item.last_used, now);
+    std::string right_text = time_text + "  " + std::to_string(item.count) + "x";
+    size_t gap = 2;
+    if (right_text.size() + gap > inner_width) {
+      right_text = time_text;
+    }
+    if (!right_text.empty() && right_text.size() + gap > inner_width) {
+      right_text.clear();
+    }
     if (idx == selected) {
-      AppendStyledLine(&out, line, width, padding, select_bg + bright + bold);
+      AppendListLine(&out, line, right_text, width, padding, select_bg + bright + bold);
     } else {
-      AppendStyledLine(&out, line, width, padding, panel_bg + text);
+      AppendListLine(&out, line, right_text, width, padding, panel_bg + text);
     }
   }
 
   AppendStyledLine(&out, rule, width, padding, header_bg + muted);
-  std::string status = "Up/Down move  Enter confirm  Esc cancel  ";
-  status += std::to_string(selected + 1) + "/" + std::to_string(items.size());
-  AppendStyledLine(&out, status, width, padding, header_bg + muted);
+  std::string meta = items.empty() ? std::string() : BuildMetaLine(items[selected]);
+  std::string hint = "Up/Down move  Enter confirm  Esc cancel  ";
+  hint += std::to_string(selected + 1) + "/" + std::to_string(items.size());
+  AppendListLine(&out, meta, hint, width, padding, header_bg + muted);
   return WriteAll(fd, out);
 }
 
