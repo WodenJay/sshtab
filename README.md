@@ -50,6 +50,8 @@ make clean
 - 自动记录：执行成功（exit code 0）的 `ssh` 会写入历史。
 - 触发选择：输入 `ssh` 或 `ssh ` 后按 Tab，会弹出最近列表；↑/↓ 选择，Enter 回填，Esc/Ctrl+C 取消。
 - 不影响原生补全：`ssh a<Tab>` 仍走原生 ssh/known_hosts 补全。
+- 查看记录 ID：`sshtab list --with-ids`（默认仅显示最近 50 条，配合 `--limit` 调整）。
+- 删除记录：`sshtab delete --index <N>` 或 `sshtab delete --pick`。
 
 ## 卸载
 

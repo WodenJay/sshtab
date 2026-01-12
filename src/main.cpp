@@ -16,8 +16,10 @@ namespace {
 void PrintUsage() {
   std::cerr << "Usage:\n"
             << "  sshtab record --exit-code <int> --raw <raw_cmd>\n"
-            << "  sshtab list --limit <N>\n"
+            << "  sshtab list --limit <N> [--with-ids]\n"
             << "  sshtab pick --limit <N> [--non-interactive --select <idx>]\n"
+            << "  sshtab delete --index <N> [--limit <N>]\n"
+            << "  sshtab delete --pick [--limit <N>]\n"
             << "  sshtab exec <args_string>\n";
 }
 
@@ -103,6 +105,7 @@ int CommandRecord(int argc, char** argv) {
 
 int CommandList(int argc, char** argv) {
   std::size_t limit = 50;
+  bool with_ids = false;
   for (int i = 2; i < argc; ++i) {
     std::string arg = argv[i];
     if (arg == "--limit") {
@@ -111,6 +114,8 @@ int CommandList(int argc, char** argv) {
         return 1;
       }
       ++i;
+    } else if (arg == "--with-ids") {
+      with_ids = true;
     } else {
       std::cerr << "Unknown argument: " << arg << "\n";
       return 1;
@@ -123,8 +128,12 @@ int CommandList(int argc, char** argv) {
     std::cerr << "list warning: " << err << "\n";
   }
 
-  for (const auto& entry : entries) {
-    std::cout << entry.command << "\n";
+  for (std::size_t i = 0; i < entries.size(); ++i) {
+    if (with_ids) {
+      std::cout << i << '\t' << entries[i].command << "\n";
+    } else {
+      std::cout << entries[i].command << "\n";
+    }
   }
   return 0;
 }
@@ -195,7 +204,8 @@ int CommandPick(int argc, char** argv) {
   }
 
   std::size_t selected = 0;
-  PickResult result = RunPickTui(items, &selected, &err);
+  PickResult result = RunPickTui(items, "sshtab pick (Enter select, Esc/Ctrl+C cancel)", &selected,
+                                 &err);
   if (result == PickResult::kSelected) {
     if (selected >= items.size()) {
       return 1;
@@ -211,6 +221,99 @@ int CommandPick(int argc, char** argv) {
     std::cerr << "pick failed: " << err << "\n";
   }
   return 1;
+}
+
+int CommandDelete(int argc, char** argv) {
+  std::size_t limit = 50;
+  bool use_pick = false;
+  int index = -1;
+
+  for (int i = 2; i < argc; ++i) {
+    std::string arg = argv[i];
+    if (arg == "--limit") {
+      if (i + 1 >= argc || !ParseSizeArg(argv[i + 1], &limit)) {
+        std::cerr << "Invalid --limit value\n";
+        return 1;
+      }
+      ++i;
+    } else if (arg == "--pick") {
+      use_pick = true;
+    } else if (arg == "--index") {
+      if (i + 1 >= argc || !ParseIntArg(argv[i + 1], &index)) {
+        std::cerr << "Invalid --index value\n";
+        return 1;
+      }
+      ++i;
+    } else {
+      std::cerr << "Unknown argument: " << arg << "\n";
+      return 1;
+    }
+  }
+
+  if (use_pick && index >= 0) {
+    std::cerr << "--pick and --index are mutually exclusive\n";
+    return 1;
+  }
+  if (!use_pick && index < 0) {
+    std::cerr << "--index or --pick is required\n";
+    return 1;
+  }
+
+  std::string err;
+  std::vector<HistoryEntry> entries = LoadRecentUnique(limit, &err);
+  if (entries.empty()) {
+    std::cerr << "delete failed: history is empty\n";
+    return 1;
+  }
+
+  std::string command;
+  if (use_pick) {
+    std::vector<PickItem> items;
+    std::vector<std::string> commands;
+    items.reserve(entries.size());
+    commands.reserve(entries.size());
+    for (const auto& entry : entries) {
+      if (HasControlChars(entry.command)) {
+        continue;
+      }
+      PickItem item;
+      item.display = entry.command;
+      item.args = entry.command;
+      items.push_back(item);
+      commands.push_back(entry.command);
+    }
+    if (items.empty()) {
+      std::cerr << "delete failed: no deletable entries\n";
+      return 1;
+    }
+    std::size_t selected = 0;
+    PickResult result =
+        RunPickTui(items, "sshtab delete (Enter delete, Esc/Ctrl+C cancel)", &selected, &err);
+    if (result != PickResult::kSelected) {
+      return 1;
+    }
+    if (selected >= commands.size()) {
+      return 1;
+    }
+    command = commands[selected];
+  } else {
+    if (index < 0) {
+      std::cerr << "Invalid --index value\n";
+      return 1;
+    }
+    if (static_cast<std::size_t>(index) >= entries.size()) {
+      std::cerr << "delete failed: index out of range\n";
+      return 1;
+    }
+    command = entries[static_cast<std::size_t>(index)].command;
+  }
+
+  int removed = 0;
+  if (!DeleteHistoryCommand(command, &removed, &err)) {
+    std::cerr << "delete failed: " << err << "\n";
+    return 1;
+  }
+  return 0;
 }
 
 int CommandExec(int argc, char** argv) {
@@ -266,6 +369,9 @@ int main(int argc, char** argv) {
   }
   if (cmd == "pick") {
     return CommandPick(argc, argv);
+  }
+  if (cmd == "delete") {
+    return CommandDelete(argc, argv);
   }
   if (cmd == "exec") {
     return CommandExec(argc, argv);

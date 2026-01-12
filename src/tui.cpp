@@ -156,11 +156,15 @@ void AppendClearedLine(std::string* out, const std::string& text, size_t width, 
   out->append("\n");
 }
 
-bool Draw(int fd, const std::vector<PickItem>& items, size_t selected, size_t offset) {
+bool Draw(int fd,
+          const std::vector<PickItem>& items,
+          const std::string& title,
+          size_t selected,
+          size_t offset) {
   const size_t width = GetTerminalWidth(fd);
   std::string out;
   out += "\x1b[2J\x1b[H";
-  AppendClearedLine(&out, "sshtab pick (Enter select, Esc/Ctrl+C cancel)", width, false);
+  AppendClearedLine(&out, title, width, false);
   size_t visible = GetVisibleCount(items.size());
   for (size_t i = 0; i < visible; ++i) {
     size_t idx = offset + i;
@@ -175,7 +179,10 @@ bool Draw(int fd, const std::vector<PickItem>& items, size_t selected, size_t of
 
 }  // namespace
 
-PickResult RunPickTui(const std::vector<PickItem>& items, std::size_t* index, std::string* err) {
+PickResult RunPickTui(const std::vector<PickItem>& items,
+                      const std::string& title,
+                      std::size_t* index,
+                      std::string* err) {
   if (items.empty()) {
     return PickResult::kCanceled;
   }
@@ -208,7 +215,7 @@ PickResult RunPickTui(const std::vector<PickItem>& items, std::size_t* index, st
 
   size_t selected = 0;
   size_t offset = 0;
-  if (!Draw(fd, items, selected, offset)) {
+  if (!Draw(fd, items, title, selected, offset)) {
     return PickResult::kError;
   }
 
@@ -259,6 +266,6 @@ PickResult RunPickTui(const std::vector<PickItem>& items, std::size_t* index, st
       offset = selected - visible + 1;
     }
 
-    Draw(fd, items, selected, offset);
+    Draw(fd, items, title, selected, offset);
   }
 }

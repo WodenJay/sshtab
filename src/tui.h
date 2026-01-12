@@ -15,4 +15,7 @@ enum class PickResult {
   kError,
 };
 
-PickResult RunPickTui(const std::vector<PickItem>& items, std::size_t* index, std::string* err);
+PickResult RunPickTui(const std::vector<PickItem>& items,
+                      const std::string& title,
+                      std::size_t* index,
+                      std::string* err);
