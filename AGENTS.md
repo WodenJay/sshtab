@@ -21,8 +21,8 @@ Build `sshtab`, a Bash-first helper that provides interactive recent SSH selecti
 3) `pick` shows TUI via `/dev/tty`, returns selected args on stdout.
 4) Completion inserts a single quoted argument: `ssh '<args>'`.
 5) User hits Enter; proxy `ssh()` calls `sshtab exec "<args>"`.
-6) `exec` tokenizes args safely and `execv` into the resolved real ssh path.
-7) Debug trap captures raw command string; prompt hook records only if exit code is 0.
+6) `exec` tokenizes args safely and `execvp` into `ssh` via PATH (no shell).
+7) If no existing DEBUG trap, it captures raw command strings; prompt hook records only if exit code is 0. If a DEBUG trap already exists, pre-hook is disabled for the session.
 
 ### Project Layout
 - `src/main.cpp` CLI entry and dispatch.
@@ -30,8 +30,11 @@ Build `sshtab`, a Bash-first helper that provides interactive recent SSH selecti
 - `src/normalize.{h,cpp}` normalize raw ssh commands.
 - `src/tokenize.{h,cpp}` tokenize args string for `exec`.
 - `src/tui.{h,cpp}` /dev/tty UI.
+- `src/util.{h,cpp}` XDG paths, base64, string helpers.
 - `scripts/install.sh` install binary + bash integration.
 - `scripts/uninstall.sh` remove integration.
+- `scripts/install-remote.sh` curl-based installer.
+- `scripts/uninstall-remote.sh` curl-based uninstaller.
 - `bash/sshtab.bash` snippet with proxy, hooks, completion.
 - `README.md` usage, install, uninstall, safety.
 - `.github/workflows/release.yml` build artifacts.
@@ -55,20 +58,22 @@ Build `sshtab`, a Bash-first helper that provides interactive recent SSH selecti
 - Output: args string or empty; non-zero exit on cancel.
 - Output must be a single line of plain text; if the selected args contain newline or control characters, treat as cancel/failure and return non-zero.
 - Must not pollute stdout during UI.
+- Optional: `--non-interactive --select <idx>` returns the args at the index without UI (test-only).
 
 ### `sshtab exec "<args_string>"`
 - Input: single string that may contain spaces.
 - Behavior: tokenize with a minimal shell-like parser (spaces, quotes, backslashes).
 - Reject if contains shell metacharacters: `; | & \` $ ( ) < >`.
 - Reject if input contains any control characters (ASCII < 0x20 or 0x7f), including `\n`, `\r`, and `\0`; return non-zero.
-- Execute the resolved real ssh path with `execv` (no shell).
+- Execute `ssh` via `execvp` (PATH resolution, no shell).
 
 ## Module Responsibilities
 - `main`: argument parsing, dispatch, exit codes.
 - `history`: XDG path resolution, file locking, append log, read and parse log, dedupe and sort.
 - `normalize`: detect ssh invocation, trim whitespace, unwrap single/double quotes for `ssh '<args>'` forms.
 - `tokenize`: split args string into argv tokens; no environment expansion or command substitution.
-- `tui`: raw mode, key handling, filter, redraw; input/output via `/dev/tty`.
+- `tui`: raw mode, key handling, redraw; input/output via `/dev/tty`.
+- `util`: XDG paths, base64 encode/decode, string helpers.
 - `bash/sshtab.bash`: proxy function, hooks, completion; no side effects unless in interactive shell.
 
 ## Data Model
@@ -104,17 +109,13 @@ Build `sshtab`, a Bash-first helper that provides interactive recent SSH selecti
 - Snippet is idempotent with begin/end markers.
 
 ## DEBUG Trap Compatibility (Pre-Hook)
-Strategy A (chain, required for v1): read existing trap with `trap -p DEBUG`, then install a new DEBUG trap that runs sshtab pre-hook first and then the original trap command.
+Strategy (v1): do not chain. If a DEBUG trap already exists, sshtab disables its pre-hook for the session and warns once, keeping only the PROMPT_COMMAND post-hook (recording disabled).
 Implementation notes:
 - If no existing trap, set DEBUG to only run `__sshtab_pre_hook`.
-- If an existing trap is found, store its command string and splice it after `__sshtab_pre_hook` when installing the new trap.
-- The chaining must not lose or reorder the existing trap logic.
-- Trap chaining must not use `eval` or any secondary interpretation of the trap string.
-- The original trap must be preserved and restored using a safe string mechanism; if the trap format is complex or cannot be safely parsed/restored, sshtab must disable its DEBUG trap and emit a warning (install-time or doctor/self-check).
-Practical chaining rules (MUST):
-- Only enable chaining when the existing trap is safe and unambiguous (single-line, no embedded newlines, no complex nested quotes/escapes that cannot be preserved verbatim).
-- If these conditions are not met, MUST fall back: do not install sshtab DEBUG trap; keep only the PROMPT_COMMAND post-hook (recording is disabled for this session).
-- MUST NOT attempt to force chaining via `eval`, `source`, or any secondary parsing of the trap string; if safe chaining is not possible, fallback is mandatory.
+- If an existing trap is found, set `SSHTAB_PREHOOK_ENABLED=0`, emit a one-time warning, and do not install a DEBUG trap.
+Practical rules (MUST):
+- Never replace or override an existing DEBUG trap.
+- Do not attempt chaining or secondary parsing of the existing trap.
 Guard rules:
 - Any sshtab-invoked helper (`record`, `pick`, `exec`) must not trigger pre-hook.
 - The ssh() proxy must set `SSHTAB_GUARD=1` immediately on entry and clear it before return.
@@ -140,7 +141,7 @@ Allowed:
 Forbidden:
 - Running `/bin/sh`, `eval`, or executing arbitrary shell strings.
 - Overwriting `PROMPT_COMMAND` or putting sshtab post-hook after existing commands.
-- Replacing a user DEBUG trap without chaining or explicit degrade behavior.
+- Replacing or chaining a user DEBUG trap; if one exists, pre-hook must be disabled with a warning.
 - Writing to stdout from `pick` except the final selection line.
 - Recording commands that are not `ssh` or have non-zero exit codes.
 - Hardcoding `/usr/bin/ssh` or assuming a fixed ssh path.
@@ -152,7 +153,7 @@ Forbidden:
 3) Normalization for `record` and args extraction for `pick`.
 4) Tokenizer + `exec` safety checks (unit tests).
 5) CLI dispatch + `record` and `list` commands.
-6) TUI `pick` with filter + /dev/tty handling.
+6) TUI `pick` with /dev/tty handling.
 7) Bash snippet (proxy, hooks, completion).
 8) Install/uninstall scripts with idempotent markers.
 9) README + GitHub Actions release workflow.
@@ -160,12 +161,12 @@ Forbidden:
 ## Acceptance Criteria
 - `ssh<Tab>` or `ssh <Tab>` opens TUI with recent commands.
 - Selecting a command inserts `ssh '<args>'` on the prompt.
-- Running that command uses the resolved real ssh path and succeeds.
+- Running that command uses `execvp` to launch `ssh` via PATH (no shell) and succeeds.
 - Only exit code 0 SSH commands are recorded.
 - Recents are unique and sorted by most recent.
 - Normal SSH completions remain unaffected outside the exact trigger case.
 - Uninstall removes bashrc block and binary; data removal is optional.
-- If DEBUG trap chaining is unsafe, sshtab disables pre-hook and warns instead of risking user trap breakage.
+- If a DEBUG trap already exists, sshtab disables pre-hook and warns instead of modifying the trap.
 - In `fallback` completion mode, pick cancel/failure/empty history yields native ssh completion.
 - When pre-hook is disabled, no new entries are written to `history.log`.
 - Typing `ssh a<Tab>` must use native ssh host/known_hosts completion.
