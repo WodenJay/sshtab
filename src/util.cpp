@@ -4,8 +4,11 @@
 #include <climits>
 #include <cstdlib>
 #include <cstring>
+#include <fcntl.h>
+#include <sys/file.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <utility>
 
 namespace {
 
@@ -181,6 +184,13 @@ bool Base64Decode(const std::string& input, std::string* output, std::string* er
     return false;
   }
 
+  if (input.size() % 4 != 0) {
+    if (err) {
+      *err = "invalid base64 length";
+    }
+    return false;
+  }
+
   auto decode_char = [](char c) -> int {
     if (c >= 'A' && c <= 'Z') return c - 'A';
     if (c >= 'a' && c <= 'z') return c - 'a' + 26;
@@ -196,10 +206,19 @@ bool Base64Decode(const std::string& input, std::string* output, std::string* er
   int val = 0;
   int valb = -8;
   int pad = 0;
-  for (char c : input) {
+  bool padding = false;
+  for (size_t i = 0; i < input.size(); ++i) {
+    char c = input[i];
     if (c == '=') {
+      padding = true;
       ++pad;
       continue;
+    }
+    if (padding) {
+      if (err) {
+        *err = "invalid base64 padding";
+      }
+      return false;
     }
     int d = decode_char(c);
     if (d < 0) {
@@ -224,5 +243,184 @@ bool Base64Decode(const std::string& input, std::string* output, std::string* er
   }
 
   *output = out;
+  return true;
+}
+
+ScopedFd::~ScopedFd() { reset(); }
+
+ScopedFd::ScopedFd(ScopedFd&& other) noexcept : fd_(other.fd_) { other.fd_ = -1; }
+
+ScopedFd& ScopedFd::operator=(ScopedFd&& other) noexcept {
+  if (this != &other) {
+    reset();
+    fd_ = other.fd_;
+    other.fd_ = -1;
+  }
+  return *this;
+}
+
+int ScopedFd::release() {
+  int fd = fd_;
+  fd_ = -1;
+  return fd;
+}
+
+void ScopedFd::reset(int fd) {
+  if (fd_ >= 0) {
+    while (close(fd_) != 0 && errno == EINTR) {
+    }
+  }
+  fd_ = fd;
+}
+
+FlockGuard::~FlockGuard() { Unlock(); }
+
+void FlockGuard::reset(int fd) {
+  Unlock();
+  fd_ = fd;
+}
+
+bool FlockGuard::LockExclusive(std::string* err) {
+  if (fd_ < 0) {
+    if (err) {
+      *err = "invalid fd for flock";
+    }
+    return false;
+  }
+  while (flock(fd_, LOCK_EX) != 0) {
+    if (errno == EINTR) {
+      continue;
+    }
+    if (err) {
+      *err = std::string("flock failed: ") + std::strerror(errno);
+    }
+    return false;
+  }
+  locked_ = true;
+  return true;
+}
+
+bool FlockGuard::LockShared(std::string* err) {
+  if (fd_ < 0) {
+    if (err) {
+      *err = "invalid fd for flock";
+    }
+    return false;
+  }
+  while (flock(fd_, LOCK_SH) != 0) {
+    if (errno == EINTR) {
+      continue;
+    }
+    if (err) {
+      *err = std::string("flock failed: ") + std::strerror(errno);
+    }
+    return false;
+  }
+  locked_ = true;
+  return true;
+}
+
+void FlockGuard::Unlock() {
+  if (!locked_ || fd_ < 0) {
+    return;
+  }
+  flock(fd_, LOCK_UN);
+  locked_ = false;
+}
+
+bool ReadAllFromFd(int fd, std::string* out, std::string* err) {
+  if (!out) {
+    if (err) {
+      *err = "output pointer is null";
+    }
+    return false;
+  }
+  out->clear();
+  while (lseek(fd, 0, SEEK_SET) < 0) {
+    if (errno == EINTR) {
+      continue;
+    }
+    if (err) {
+      *err = std::string("lseek failed: ") + std::strerror(errno);
+    }
+    return false;
+  }
+  char buf[4096];
+  while (true) {
+    ssize_t n = read(fd, buf, sizeof(buf));
+    if (n < 0) {
+      if (errno == EINTR) {
+        continue;
+      }
+      if (err) {
+        *err = std::string("read failed: ") + std::strerror(errno);
+      }
+      return false;
+    }
+    if (n == 0) {
+      break;
+    }
+    out->append(buf, static_cast<size_t>(n));
+  }
+  return true;
+}
+
+bool WriteAllToFd(int fd, const std::string& data, std::string* err) {
+  size_t offset = 0;
+  while (offset < data.size()) {
+    ssize_t n = write(fd, data.data() + offset, data.size() - offset);
+    if (n < 0) {
+      if (errno == EINTR) {
+        continue;
+      }
+      if (err) {
+        *err = std::string("write failed: ") + std::strerror(errno);
+      }
+      return false;
+    }
+    if (n == 0) {
+      if (err) {
+        *err = "write failed: short write";
+      }
+      return false;
+    }
+    offset += static_cast<size_t>(n);
+  }
+  return true;
+}
+
+std::string DirnameFromPath(const std::string& path) {
+  size_t slash = path.find_last_of('/');
+  if (slash == std::string::npos) {
+    return ".";
+  }
+  if (slash == 0) {
+    return "/";
+  }
+  return path.substr(0, slash);
+}
+
+bool FsyncDir(const std::string& dir, std::string* err) {
+  int flags = O_RDONLY;
+#ifdef O_DIRECTORY
+  flags |= O_DIRECTORY;
+#endif
+#ifdef O_CLOEXEC
+  flags |= O_CLOEXEC;
+#endif
+  int fd = open(dir.c_str(), flags);
+  if (fd < 0) {
+    if (err) {
+      *err = std::string("open dir failed: ") + std::strerror(errno);
+    }
+    return false;
+  }
+  ScopedFd fd_guard(fd);
+  if (fsync(fd) != 0) {
+    if (err) {
+      *err = std::string("fsync dir failed: ") + std::strerror(errno);
+    }
+    return false;
+  }
   return true;
 }

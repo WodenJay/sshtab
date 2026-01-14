@@ -6,10 +6,13 @@
 #include "util.h"
 
 #include <cerrno>
+#include <charconv>
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
+#include <limits>
 #include <string>
+#include <system_error>
 #include <unordered_map>
 #include <vector>
 #include <unistd.h>
@@ -43,13 +46,14 @@ namespace
     {
       return false;
     }
-    char *end = nullptr;
-    long v = std::strtol(arg, &end, 10);
-    if (!end || *end != '\0')
+    int value = 0;
+    const char *end = arg + std::strlen(arg);
+    auto result = std::from_chars(arg, end, value, 10);
+    if (result.ec != std::errc() || result.ptr != end)
     {
       return false;
     }
-    *out = static_cast<int>(v);
+    *out = value;
     return true;
   }
 
@@ -59,13 +63,22 @@ namespace
     {
       return false;
     }
-    char *end = nullptr;
-    unsigned long v = std::strtoul(arg, &end, 10);
-    if (!end || *end != '\0')
+    if (arg[0] == '-')
     {
       return false;
     }
-    *out = static_cast<std::size_t>(v);
+    unsigned long long value = 0;
+    const char *end = arg + std::strlen(arg);
+    auto result = std::from_chars(arg, end, value, 10);
+    if (result.ec != std::errc() || result.ptr != end)
+    {
+      return false;
+    }
+    if (value > std::numeric_limits<std::size_t>::max())
+    {
+      return false;
+    }
+    *out = static_cast<std::size_t>(value);
     return true;
   }
 
@@ -291,6 +304,11 @@ namespace
     {
       std::cerr << "--raw is required\n";
       return 1;
+    }
+
+    if (ContainsControlChars(raw))
+    {
+      return 0;
     }
 
     if (exit_code != 0)
@@ -806,16 +824,23 @@ namespace
       return 1;
     }
 
-    std::vector<char *> argv_exec;
-    argv_exec.reserve(tokens.size() + 2);
-    argv_exec.push_back(const_cast<char *>("ssh"));
-    for (auto &t : tokens)
+    std::vector<std::string> argv_storage;
+    argv_storage.reserve(tokens.size() + 1);
+    argv_storage.emplace_back("ssh");
+    for (const auto &t : tokens)
     {
-      argv_exec.push_back(const_cast<char *>(t.c_str()));
+      argv_storage.push_back(t);
+    }
+
+    std::vector<char *> argv_exec;
+    argv_exec.reserve(argv_storage.size() + 1);
+    for (auto &arg : argv_storage)
+    {
+      argv_exec.push_back(arg.data());
     }
     argv_exec.push_back(nullptr);
 
-    execvp("ssh", argv_exec.data());
+    execvp(argv_exec[0], argv_exec.data());
     std::cerr << "exec failed: " << std::strerror(errno) << "\n";
     return 1;
   }

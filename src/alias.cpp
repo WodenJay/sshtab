@@ -15,88 +15,6 @@
 
 namespace
 {
-
-  bool ReadAllFromFd(int fd, std::string *out, std::string *err)
-  {
-    if (!out)
-    {
-      if (err)
-      {
-        *err = "output pointer is null";
-      }
-      return false;
-    }
-    out->clear();
-    if (lseek(fd, 0, SEEK_SET) < 0)
-    {
-      if (err)
-      {
-        *err = std::string("lseek failed: ") + std::strerror(errno);
-      }
-      return false;
-    }
-    char buf[4096];
-    while (true)
-    {
-      ssize_t n = read(fd, buf, sizeof(buf));
-      if (n < 0)
-      {
-        if (errno == EINTR)
-        {
-          continue;
-        }
-        if (err)
-        {
-          *err = std::string("read failed: ") + std::strerror(errno);
-        }
-        return false;
-      }
-      if (n == 0)
-      {
-        break;
-      }
-      out->append(buf, static_cast<size_t>(n));
-    }
-    return true;
-  }
-
-  bool WriteAllToFd(int fd, const std::string &data, std::string *err)
-  {
-    size_t offset = 0;
-    while (offset < data.size())
-    {
-      ssize_t n = write(fd, data.data() + offset, data.size() - offset);
-      if (n < 0)
-      {
-        if (errno == EINTR)
-        {
-          continue;
-        }
-        if (err)
-        {
-          *err = std::string("write failed: ") + std::strerror(errno);
-        }
-        return false;
-      }
-      offset += static_cast<size_t>(n);
-    }
-    return true;
-  }
-
-  std::string DirnameFromPath(const std::string &path)
-  {
-    size_t slash = path.find_last_of('/');
-    if (slash == std::string::npos)
-    {
-      return ".";
-    }
-    if (slash == 0)
-    {
-      return "/";
-    }
-    return path.substr(0, slash);
-  }
-
   void ParseAliasContent(const std::string &content, std::unordered_map<std::string, std::string> *aliases)
   {
     if (!aliases)
@@ -197,7 +115,7 @@ bool LoadAliases(std::unordered_map<std::string, std::string> *aliases, std::str
     return false;
   }
 
-  int fd = open(path.c_str(), O_RDONLY);
+  int fd = open(path.c_str(), O_RDONLY | O_CLOEXEC);
   if (fd < 0)
   {
     if (errno == ENOENT)
@@ -211,30 +129,21 @@ bool LoadAliases(std::unordered_map<std::string, std::string> *aliases, std::str
     return false;
   }
 
-  bool ok = true;
-  if (flock(fd, LOCK_SH) != 0)
+  ScopedFd fd_guard(fd);
+  FlockGuard lock(fd);
+  if (!lock.LockShared(err))
   {
-    if (err)
-    {
-      *err = std::string("flock failed: ") + std::strerror(errno);
-    }
-    ok = false;
+    return false;
   }
 
   std::string content;
-  if (ok && !ReadAllFromFd(fd, &content, err))
+  if (!ReadAllFromFd(fd, &content, err))
   {
-    ok = false;
+    return false;
   }
 
-  if (ok)
-  {
-    ParseAliasContent(content, aliases);
-  }
-
-  flock(fd, LOCK_UN);
-  close(fd);
-  return ok;
+  ParseAliasContent(content, aliases);
+  return true;
 }
 
 bool SetAliasForArgs(const std::string &args, const std::string &alias, std::string *err)
@@ -264,7 +173,7 @@ bool SetAliasForArgs(const std::string &args, const std::string &alias, std::str
   }
 
   std::string path = dir + "/aliases.log";
-  int fd = open(path.c_str(), O_RDWR | O_CREAT, 0600);
+  int fd = open(path.c_str(), O_RDWR | O_CREAT | O_CLOEXEC, 0600);
   if (fd < 0)
   {
     if (err)
@@ -274,104 +183,77 @@ bool SetAliasForArgs(const std::string &args, const std::string &alias, std::str
     return false;
   }
 
-  bool ok = true;
-  if (flock(fd, LOCK_EX) != 0)
+  ScopedFd fd_guard(fd);
+  FlockGuard lock(fd);
+  if (!lock.LockExclusive(err))
   {
-    if (err)
-    {
-      *err = std::string("flock failed: ") + std::strerror(errno);
-    }
-    ok = false;
+    return false;
   }
 
   std::unordered_map<std::string, std::string> aliases;
   std::string content;
-  if (ok && !ReadAllFromFd(fd, &content, err))
+  if (!ReadAllFromFd(fd, &content, err))
   {
-    ok = false;
+    return false;
   }
-  if (ok)
-  {
-    ParseAliasContent(content, &aliases);
-  }
+  ParseAliasContent(content, &aliases);
 
-  if (ok)
+  if (alias.empty())
   {
-    if (alias.empty())
-    {
-      aliases.erase(args);
-    }
-    else
-    {
-      aliases[args] = alias;
-    }
+    aliases.erase(args);
+  }
+  else
+  {
+    aliases[args] = alias;
   }
 
   std::string dir_path = DirnameFromPath(path);
   std::string tmp_path;
-  int tmp_fd = -1;
-  if (ok)
+  ScopedFd tmp_guard;
   {
     std::string tmpl = dir_path + "/aliases.log.tmp.XXXXXX";
     std::vector<char> tmp_buf(tmpl.begin(), tmpl.end());
     tmp_buf.push_back('\0');
-    tmp_fd = mkstemp(tmp_buf.data());
+    int tmp_fd = mkstemp(tmp_buf.data());
     if (tmp_fd < 0)
     {
       if (err)
       {
         *err = std::string("mkstemp failed: ") + std::strerror(errno);
       }
-      ok = false;
+      return false;
     }
-    else
-    {
-      tmp_path = tmp_buf.data();
-    }
+    tmp_path = tmp_buf.data();
+    tmp_guard.reset(tmp_fd);
   }
 
-  if (ok)
+  if (!WriteAliases(tmp_guard.get(), aliases, err))
   {
-    if (!WriteAliases(tmp_fd, aliases, err))
-    {
-      ok = false;
-    }
+    return false;
   }
 
-  if (ok)
+  if (fsync(tmp_guard.get()) != 0)
   {
-    if (fsync(tmp_fd) != 0)
+    if (err)
     {
-      if (err)
-      {
-        *err = std::string("fsync failed: ") + std::strerror(errno);
-      }
-      ok = false;
+      *err = std::string("fsync failed: ") + std::strerror(errno);
     }
+    return false;
   }
 
-  if (ok)
+  if (rename(tmp_path.c_str(), path.c_str()) != 0)
   {
-    if (rename(tmp_path.c_str(), path.c_str()) != 0)
+    if (err)
     {
-      if (err)
-      {
-        *err = std::string("rename failed: ") + std::strerror(errno);
-      }
-      ok = false;
+      *err = std::string("rename failed: ") + std::strerror(errno);
     }
-  }
-
-  if (tmp_fd >= 0)
-  {
-    close(tmp_fd);
-  }
-  if (!tmp_path.empty() && !ok)
-  {
     unlink(tmp_path.c_str());
+    return false;
   }
 
-  flock(fd, LOCK_UN);
-  close(fd);
-  return ok;
+  if (!FsyncDir(dir_path, err))
+  {
+    return false;
+  }
+  return true;
 }
