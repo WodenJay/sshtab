@@ -1,13 +1,16 @@
+#include "alias.h"
 #include "history.h"
 #include "normalize.h"
 #include "tokenize.h"
 #include "tui.h"
+#include "util.h"
 
 #include <cerrno>
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
 #include <string>
+#include <unordered_map>
 #include <vector>
 #include <unistd.h>
 
@@ -25,6 +28,7 @@ void PrintUsage() {
             << "  sshtab record --exit-code <int> --raw <raw_cmd>\n"
             << "  sshtab list --limit <N> [--with-ids]\n"
             << "  sshtab pick --limit <N> [--non-interactive --select <idx>]\n"
+            << "  sshtab alias --name <alias> (--id <N> [--limit <N>] | --address <addr>)\n"
             << "  sshtab delete --index <N> [--limit <N>]\n"
             << "  sshtab delete --pick [--limit <N>]\n"
             << "  sshtab exec <args_string>\n";
@@ -141,6 +145,63 @@ SshMeta ExtractSshMeta(const std::string& args) {
   return meta;
 }
 
+bool NormalizeArgsInput(const std::string& input, std::string* out, std::string* err) {
+  if (!out) {
+    if (err) {
+      *err = "args output pointer is null";
+    }
+    return false;
+  }
+  std::string trimmed = TrimSpace(input);
+  if (trimmed.empty()) {
+    if (err) {
+      *err = "args is empty";
+    }
+    return false;
+  }
+
+  std::string normalized;
+  if (NormalizeSshCommand(trimmed, &normalized)) {
+    std::string args = ExtractArgsFromCommand(normalized);
+    if (args.empty()) {
+      if (err) {
+        *err = "args is empty";
+      }
+      return false;
+    }
+    *out = args;
+    return true;
+  }
+
+  std::string args = CollapseSpaces(trimmed);
+  if (args.empty()) {
+    if (err) {
+      *err = "args is empty";
+    }
+    return false;
+  }
+  *out = args;
+  return true;
+}
+
+bool NormalizeAliasName(const std::string& input, std::string* out, std::string* err) {
+  if (!out) {
+    if (err) {
+      *err = "alias output pointer is null";
+    }
+    return false;
+  }
+  std::string trimmed = TrimSpace(input);
+  if (ContainsControlChars(trimmed)) {
+    if (err) {
+      *err = "alias contains control characters";
+    }
+    return false;
+  }
+  *out = trimmed;
+  return true;
+}
+
 int CommandRecord(int argc, char** argv) {
   int exit_code = -1;
   std::string raw;
@@ -255,6 +316,9 @@ int CommandPick(int argc, char** argv) {
 
   std::string err;
   std::vector<HistoryEntry> entries = LoadRecentUnique(limit, &err);
+  std::unordered_map<std::string, std::string> aliases;
+  std::string alias_err;
+  LoadAliases(&aliases, &alias_err);
   std::vector<PickItem> items;
   items.reserve(entries.size());
   for (const auto& entry : entries) {
@@ -268,6 +332,10 @@ int CommandPick(int argc, char** argv) {
     SshMeta meta = ExtractSshMeta(args);
     PickItem item;
     item.display = entry.command;
+    auto alias_it = aliases.find(args);
+    if (alias_it != aliases.end() && !HasControlChars(alias_it->second)) {
+      item.alias = alias_it->second;
+    }
     item.args = args;
     item.last_used = entry.last_used;
     item.count = entry.count;
@@ -298,9 +366,33 @@ int CommandPick(int argc, char** argv) {
     return 0;
   }
 
+  PickUiConfig config;
+  config.allow_alias_edit = true;
+  config.allow_display_toggle = true;
+  config.show_alias = true;
+
+  AliasUpdateFn alias_update = [&](const PickItem& item, const std::string& alias_input,
+                                   std::string* out_err) -> bool {
+    std::string alias;
+    std::string alias_err;
+    if (!NormalizeAliasName(alias_input, &alias, &alias_err)) {
+      if (out_err) {
+        *out_err = alias_err;
+      }
+      return false;
+    }
+    if (ContainsControlChars(item.args)) {
+      if (out_err) {
+        *out_err = "args contain control characters";
+      }
+      return false;
+    }
+    return SetAliasForArgs(item.args, alias, out_err);
+  };
+
   std::size_t selected = 0;
   PickResult result = RunPickTui(items, "sshtab pick (Enter select, Esc/Ctrl+C cancel)", &selected,
-                                 &err);
+                                 config, alias_update, &err);
   if (result == PickResult::kSelected) {
     if (selected >= items.size()) {
       return 1;
@@ -316,6 +408,104 @@ int CommandPick(int argc, char** argv) {
     std::cerr << "pick failed: " << err << "\n";
   }
   return 1;
+}
+
+int CommandAlias(int argc, char** argv) {
+  std::size_t limit = 50;
+  int id = -1;
+  std::string address;
+  std::string name;
+  bool have_name = false;
+
+  for (int i = 2; i < argc; ++i) {
+    std::string arg = argv[i];
+    if (arg == "--id") {
+      if (i + 1 >= argc || !ParseIntArg(argv[i + 1], &id)) {
+        std::cerr << "Invalid --id value\n";
+        return 1;
+      }
+      ++i;
+    } else if (arg == "--address") {
+      if (i + 1 >= argc) {
+        std::cerr << "Missing --address value\n";
+        return 1;
+      }
+      address = argv[++i];
+    } else if (arg == "--name") {
+      if (i + 1 >= argc) {
+        std::cerr << "Missing --name value\n";
+        return 1;
+      }
+      name = argv[++i];
+      have_name = true;
+    } else if (arg == "--limit") {
+      if (i + 1 >= argc || !ParseSizeArg(argv[i + 1], &limit)) {
+        std::cerr << "Invalid --limit value\n";
+        return 1;
+      }
+      ++i;
+    } else {
+      std::cerr << "Unknown argument: " << arg << "\n";
+      return 1;
+    }
+  }
+
+  if (!have_name) {
+    std::cerr << "--name is required\n";
+    return 1;
+  }
+  if (id >= 0 && !address.empty()) {
+    std::cerr << "--id and --address are mutually exclusive\n";
+    return 1;
+  }
+  if (id < 0 && address.empty()) {
+    std::cerr << "--id or --address is required\n";
+    return 1;
+  }
+
+  std::string alias;
+  std::string alias_err;
+  if (!NormalizeAliasName(name, &alias, &alias_err)) {
+    std::cerr << "alias failed: " << alias_err << "\n";
+    return 1;
+  }
+
+  std::string args;
+  std::string args_err;
+  if (id >= 0) {
+    std::string err;
+    std::vector<HistoryEntry> entries = LoadRecentUnique(limit, &err);
+    if (entries.empty()) {
+      std::cerr << "alias failed: history is empty\n";
+      return 1;
+    }
+    if (static_cast<std::size_t>(id) >= entries.size()) {
+      std::cerr << "alias failed: id out of range\n";
+      return 1;
+    }
+    args = ExtractArgsFromCommand(entries[static_cast<std::size_t>(id)].command);
+    if (args.empty()) {
+      std::cerr << "alias failed: empty args\n";
+      return 1;
+    }
+  } else {
+    if (!NormalizeArgsInput(address, &args, &args_err)) {
+      std::cerr << "alias failed: " << args_err << "\n";
+      return 1;
+    }
+  }
+
+  if (ContainsControlChars(args)) {
+    std::cerr << "alias failed: args contain control characters\n";
+    return 1;
+  }
+
+  std::string err;
+  if (!SetAliasForArgs(args, alias, &err)) {
+    std::cerr << "alias failed: " << err << "\n";
+    return 1;
+  }
+  return 0;
 }
 
 int CommandDelete(int argc, char** argv) {
@@ -361,6 +551,10 @@ int CommandDelete(int argc, char** argv) {
     return 1;
   }
 
+  std::unordered_map<std::string, std::string> aliases;
+  std::string alias_err;
+  LoadAliases(&aliases, &alias_err);
+
   std::string command;
   if (use_pick) {
     std::vector<PickItem> items;
@@ -375,6 +569,10 @@ int CommandDelete(int argc, char** argv) {
       SshMeta meta = ExtractSshMeta(args);
       PickItem item;
       item.display = entry.command;
+      auto alias_it = aliases.find(args);
+      if (alias_it != aliases.end() && !HasControlChars(alias_it->second)) {
+        item.alias = alias_it->second;
+      }
       item.args = args;
       item.last_used = entry.last_used;
       item.count = entry.count;
@@ -389,9 +587,13 @@ int CommandDelete(int argc, char** argv) {
       std::cerr << "delete failed: no deletable entries\n";
       return 1;
     }
+    PickUiConfig config;
+    config.allow_alias_edit = false;
+    config.allow_display_toggle = true;
+    config.show_alias = true;
     std::size_t selected = 0;
-    PickResult result =
-        RunPickTui(items, "sshtab delete (Enter delete, Esc/Ctrl+C cancel)", &selected, &err);
+    PickResult result = RunPickTui(items, "sshtab delete (Enter delete, Esc/Ctrl+C cancel)",
+                                   &selected, config, AliasUpdateFn(), &err);
     if (result != PickResult::kSelected) {
       return 1;
     }
@@ -472,6 +674,9 @@ int main(int argc, char** argv) {
   }
   if (cmd == "pick") {
     return CommandPick(argc, argv);
+  }
+  if (cmd == "alias") {
+    return CommandAlias(argc, argv);
   }
   if (cmd == "delete") {
     return CommandDelete(argc, argv);

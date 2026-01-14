@@ -52,6 +52,8 @@ make clean
 - 不影响原生补全：`ssh a<Tab>` 仍走原生 ssh/known_hosts 补全。
 - 查看记录 ID：`sshtab list --with-ids`（默认仅显示最近 50 条，配合 `--limit` 调整）。
 - 删除记录：`sshtab delete --index <N>` 或 `sshtab delete --pick`。
+- 别名：在选择器中按 `n` 为当前条目设置/修改别名；按 Shift+Tab（或 `S`）在别名与地址显示间切换，别名仅用于展示。
+- 命令行别名：`sshtab alias --id <N> --name "<alias>"` 或 `sshtab alias --address "<args 或 ssh 命令>" --name "<alias>"`；`--name ""` 清除别名。
 
 ## 卸载
 

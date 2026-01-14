@@ -5,6 +5,7 @@
 
 std::string GetDataDir(std::string* err);
 std::string GetHistoryPath(std::string* err);
+std::string GetAliasPath(std::string* err);
 bool EnsureDir(const std::string& path, std::string* err);
 
 std::string TrimSpace(const std::string& s);

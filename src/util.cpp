@@ -60,6 +60,14 @@ std::string GetHistoryPath(std::string* err) {
   return dir + "/history.log";
 }
 
+std::string GetAliasPath(std::string* err) {
+  std::string dir = GetDataDir(err);
+  if (dir.empty()) {
+    return std::string();
+  }
+  return dir + "/aliases.log";
+}
+
 bool EnsureDir(const std::string& path, std::string* err) {
   if (path.empty()) {
     if (err) {

@@ -1,5 +1,7 @@
 #include "tui.h"
 
+#include "util.h"
+
 #include <cerrno>
 #include <cstring>
 #include <ctime>
@@ -42,6 +44,15 @@ bool ReadByte(int fd, char* out) {
     }
     return false;
   }
+}
+
+bool HasControlChars(const std::string& s) {
+  for (unsigned char c : s) {
+    if (c < 0x20 || c == 0x7f) {
+      return true;
+    }
+  }
+  return false;
 }
 
 struct TerminalUiGuard {
@@ -231,6 +242,29 @@ std::string BuildMetaLine(const PickItem& item) {
   return out;
 }
 
+std::string PickItemLabel(const PickItem& item, bool show_alias) {
+  if (show_alias && !item.alias.empty()) {
+    return item.alias;
+  }
+  return item.display;
+}
+
+std::string BuildHintText(const PickUiConfig& config, bool show_alias, size_t selected, size_t total) {
+  std::string hint = "Up/Down move  Enter confirm  Esc cancel";
+  if (config.allow_alias_edit) {
+    hint += "  n alias";
+  }
+  if (config.allow_display_toggle) {
+    hint += "  Shift+Tab/S toggle";
+    hint += show_alias ? "  view: alias" : "  view: addr";
+  }
+  hint += "  ";
+  hint += std::to_string(selected + 1);
+  hint += "/";
+  hint += std::to_string(total);
+  return hint;
+}
+
 void AppendStyledLine(std::string* out,
                       const std::string& text,
                       size_t width,
@@ -296,7 +330,10 @@ bool Draw(int fd,
           const std::vector<PickItem>& items,
           const std::string& title,
           size_t selected,
-          size_t offset) {
+          size_t offset,
+          bool show_alias,
+          const std::string& footer_left,
+          const std::string& footer_right) {
   const TerminalSize size = GetTerminalSize(fd);
   const size_t width = size.cols;
   const size_t rows = size.rows;
@@ -332,7 +369,7 @@ bool Draw(int fd,
     }
     const PickItem& item = items[idx];
     std::string prefix = idx == selected ? "> " : "  ";
-    std::string line = prefix + item.display;
+    std::string line = prefix + PickItemLabel(item, show_alias);
     std::string time_text = FormatRelativeTime(item.last_used, now);
     std::string right_text = time_text + "  " + std::to_string(item.count) + "x";
     size_t gap = 2;
@@ -350,18 +387,17 @@ bool Draw(int fd,
   }
 
   AppendStyledLine(&out, rule, width, padding, header_bg + muted);
-  std::string meta = items.empty() ? std::string() : BuildMetaLine(items[selected]);
-  std::string hint = "Up/Down move  Enter confirm  Esc cancel  ";
-  hint += std::to_string(selected + 1) + "/" + std::to_string(items.size());
-  AppendListLine(&out, meta, hint, width, padding, header_bg + muted);
+  AppendListLine(&out, footer_left, footer_right, width, padding, header_bg + muted);
   return WriteAll(fd, out);
 }
 
 }  // namespace
 
-PickResult RunPickTui(const std::vector<PickItem>& items,
+PickResult RunPickTui(std::vector<PickItem>& items,
                       const std::string& title,
                       std::size_t* index,
+                      const PickUiConfig& config,
+                      const AliasUpdateFn& alias_update,
                       std::string* err) {
   if (items.empty()) {
     return PickResult::kCanceled;
@@ -395,7 +431,30 @@ PickResult RunPickTui(const std::vector<PickItem>& items,
 
   size_t selected = 0;
   size_t offset = 0;
-  if (!Draw(fd, items, title, selected, offset)) {
+  bool show_alias = config.show_alias;
+  bool prompt_active = false;
+  std::string prompt_input;
+  std::string status;
+  bool clear_status_on_next_input = false;
+
+  auto draw = [&]() -> bool {
+    std::string footer_left;
+    std::string footer_right;
+    if (prompt_active) {
+      footer_left = "alias: " + prompt_input;
+      footer_right = "Enter save  Esc cancel";
+    } else {
+      if (!status.empty()) {
+        footer_left = status;
+      } else {
+        footer_left = BuildMetaLine(items[selected]);
+      }
+      footer_right = BuildHintText(config, show_alias, selected, items.size());
+    }
+    return Draw(fd, items, title, selected, offset, show_alias, footer_left, footer_right);
+  };
+
+  if (!draw()) {
     return PickResult::kError;
   }
 
@@ -405,6 +464,76 @@ PickResult RunPickTui(const std::vector<PickItem>& items,
       continue;
     }
 
+    if (prompt_active) {
+      if (c == 0x03) {
+        prompt_active = false;
+        prompt_input.clear();
+        draw();
+        continue;
+      }
+      if (c == '\r' || c == '\n') {
+        std::string alias = TrimSpace(prompt_input);
+        std::string update_err;
+        if (!alias_update) {
+          status = "alias update unavailable";
+        } else if (HasControlChars(alias)) {
+          status = "alias rejected: control characters";
+        } else if (alias_update(items[selected], alias, &update_err)) {
+          items[selected].alias = alias;
+          status = alias.empty() ? "alias cleared" : "alias saved";
+        } else {
+          status = update_err.empty() ? "alias failed" : update_err;
+        }
+        prompt_active = false;
+        prompt_input.clear();
+        clear_status_on_next_input = true;
+        draw();
+        continue;
+      }
+      if (c == 0x1b) {
+        char next = 0;
+        if (!ReadByte(fd, &next)) {
+          prompt_active = false;
+          prompt_input.clear();
+          draw();
+          continue;
+        }
+        if (next != '[') {
+          prompt_active = false;
+          prompt_input.clear();
+          draw();
+          continue;
+        }
+        char code = 0;
+        if (!ReadByte(fd, &code)) {
+          continue;
+        }
+        if (code == 'A' || code == 'B' || code == 'Z') {
+          draw();
+          continue;
+        }
+        continue;
+      }
+      if (c == 0x7f || c == 0x08) {
+        if (!prompt_input.empty()) {
+          prompt_input.pop_back();
+        }
+        draw();
+        continue;
+      }
+      unsigned char uc = static_cast<unsigned char>(c);
+      if (uc >= 0x20 && uc != 0x7f) {
+        prompt_input.push_back(c);
+        draw();
+      }
+      continue;
+    }
+
+    if (clear_status_on_next_input) {
+      status.clear();
+      clear_status_on_next_input = false;
+    }
+
     if (c == 0x03) {
       return PickResult::kCanceled;
     }
@@ -412,6 +541,19 @@ PickResult RunPickTui(const std::vector<PickItem>& items,
     if (c == '\r' || c == '\n') {
       *index = selected;
       return PickResult::kSelected;
+    }
+
+    if ((c == 'n' || c == 'N') && config.allow_alias_edit && alias_update) {
+      prompt_active = true;
+      prompt_input = items[selected].alias;
+      draw();
+      continue;
+    }
+
+    if ((c == 'S') && config.allow_display_toggle) {
+      show_alias = !show_alias;
+      draw();
+      continue;
     }
 
     if (c == 0x1b) {
@@ -434,6 +576,8 @@ PickResult RunPickTui(const std::vector<PickItem>& items,
         if (selected + 1 < items.size()) {
           ++selected;
         }
+      } else if (code == 'Z' && config.allow_display_toggle) {
+        show_alias = !show_alias;
       } else {
         continue;
       }
@@ -446,6 +590,6 @@ PickResult RunPickTui(const std::vector<PickItem>& items,
       offset = selected - visible + 1;
     }
 
-    Draw(fd, items, title, selected, offset);
+    draw();
   }
 }
