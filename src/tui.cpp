@@ -250,13 +250,22 @@ std::string PickItemLabel(const PickItem& item, bool show_alias) {
 }
 
 std::string BuildHintText(const PickUiConfig& config, bool show_alias, size_t selected, size_t total) {
-  std::string hint = "Up/Down move  Enter confirm  Esc cancel";
+  std::vector<std::string> parts;
+  parts.push_back("Up/Down: move");
+  parts.push_back("Enter: select");
+  parts.push_back("Esc: cancel");
   if (config.allow_alias_edit) {
-    hint += "  n alias";
+    parts.push_back("n: alias");
   }
   if (config.allow_display_toggle) {
-    hint += "  Shift+Tab/S toggle";
-    hint += show_alias ? "  view: alias" : "  view: addr";
+    parts.push_back(show_alias ? "Shift+Tab or S: view=alias" : "Shift+Tab or S: view=addr");
+  }
+  std::string hint;
+  for (size_t i = 0; i < parts.size(); ++i) {
+    if (i > 0) {
+      hint += " | ";
+    }
+    hint += parts[i];
   }
   hint += "  ";
   hint += std::to_string(selected + 1);
@@ -332,8 +341,8 @@ bool Draw(int fd,
           size_t selected,
           size_t offset,
           bool show_alias,
-          const std::string& footer_left,
-          const std::string& footer_right) {
+          const std::string& header_hint,
+          const std::string& footer_left) {
   const TerminalSize size = GetTerminalSize(fd);
   const size_t width = size.cols;
   const size_t rows = size.rows;
@@ -354,10 +363,7 @@ bool Draw(int fd,
     title_base = "sshtab";
   }
   std::string header_text = title_base + "  [" + std::to_string(items.size()) + "]";
-  AppendStyledLine(&out, header_text, width, padding, header_bg + accent + bold);
-
-  std::string rule(width > padding * 2 ? width - padding * 2 : 0, '-');
-  AppendStyledLine(&out, rule, width, padding, header_bg + muted);
+  AppendListLine(&out, header_text, header_hint, width, padding, header_bg + accent + bold);
 
   std::time_t now = std::time(nullptr);
   size_t inner_width = width > padding * 2 ? width - padding * 2 : 0;
@@ -386,8 +392,9 @@ bool Draw(int fd,
     }
   }
 
+  std::string rule(width > padding * 2 ? width - padding * 2 : 0, '-');
   AppendStyledLine(&out, rule, width, padding, header_bg + muted);
-  AppendListLine(&out, footer_left, footer_right, width, padding, header_bg + muted);
+  AppendListLine(&out, footer_left, "", width, padding, header_bg + muted);
   return WriteAll(fd, out);
 }
 
@@ -439,19 +446,19 @@ PickResult RunPickTui(std::vector<PickItem>& items,
 
   auto draw = [&]() -> bool {
     std::string footer_left;
-    std::string footer_right;
+    std::string header_hint;
     if (prompt_active) {
       footer_left = "alias: " + prompt_input;
-      footer_right = "Enter save  Esc cancel";
+      header_hint = "Alias edit: Enter save | Esc cancel";
     } else {
       if (!status.empty()) {
         footer_left = status;
       } else {
         footer_left = BuildMetaLine(items[selected]);
       }
-      footer_right = BuildHintText(config, show_alias, selected, items.size());
+      header_hint = BuildHintText(config, show_alias, selected, items.size());
     }
-    return Draw(fd, items, title, selected, offset, show_alias, footer_left, footer_right);
+    return Draw(fd, items, title, selected, offset, show_alias, header_hint, footer_left);
   };
 
   if (!draw()) {
