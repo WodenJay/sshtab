@@ -228,9 +228,23 @@ __sshtab_complete_command() {
   fi
 
   SSHTAB_CAPTURE_NEXT=1
-  READLINE_LINE="$command"
-  READLINE_POINT=${#READLINE_LINE}
-  COMPREPLY=()
+
+  if [[ -n ${READLINE_LINE+x} ]]; then
+    READLINE_LINE="$command"
+    READLINE_POINT=${#READLINE_LINE}
+    COMPREPLY=()
+    return 0
+  fi
+
+  local trimmed_prefix="$line_prefix"
+  trimmed_prefix="${trimmed_prefix%"${trimmed_prefix##*[![:space:]]}"}"
+  local trimmed_word="${trimmed_prefix##*[[:space:]]}"
+  COMP_LINE="$trimmed_prefix"
+  COMP_POINT=${#COMP_LINE}
+  COMP_WORDS=("$trimmed_word")
+  COMP_CWORD=0
+  COMPREPLY=("$command")
+  compopt -o nospace 2>/dev/null
   return 0
 }
 
