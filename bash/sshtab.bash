@@ -130,6 +130,10 @@ __sshtab_pre_hook() {
   [[ -z ${SSHTAB_GUARD:-} ]] || return
 
   local cmd="$BASH_COMMAND"
+  if [[ -n ${SSHTAB_CAPTURE_NEXT:-} ]]; then
+    unset SSHTAB_CAPTURE_NEXT
+    SSHTAB_PENDING_COMMAND="$cmd"
+  fi
   if [[ $cmd =~ ^ssh([[:space:]]|$) ]]; then
     SSHTAB_PENDING_RAW="$cmd"
   fi
@@ -139,28 +143,34 @@ __sshtab_post_hook() {
   local ec=$?
 
   if [[ ${SSHTAB_PREHOOK_ENABLED:-1} -eq 0 ]]; then
+    unset SSHTAB_CAPTURE_NEXT
+    unset SSHTAB_PENDING_COMMAND
     __sshtab_warn_once SSHTAB_WARNED_PREHOOK_DISABLED "sshtab: pre-hook disabled; recording skipped"
     return
   fi
 
-  if [[ -z ${SSHTAB_PENDING_RAW:-} ]]; then
-    return
-  fi
-
-  local raw="$SSHTAB_PENDING_RAW"
-  SSHTAB_PENDING_RAW=""
+  local raw="${SSHTAB_PENDING_RAW:-}"
+  local pending_command="${SSHTAB_PENDING_COMMAND:-}"
+  unset SSHTAB_PENDING_RAW
+  unset SSHTAB_PENDING_COMMAND
 
   if [[ $ec -ne 0 ]]; then
     return
   fi
 
-  local prev_guard=${SSHTAB_GUARD:-}
-  SSHTAB_GUARD=1
-  sshtab record --exit-code "$ec" --raw "$raw" >/dev/null 2>&1
-  if [[ -n $prev_guard ]]; then
-    SSHTAB_GUARD=$prev_guard
-  else
-    unset SSHTAB_GUARD
+  if [[ -n $raw ]]; then
+    local prev_guard=${SSHTAB_GUARD:-}
+    SSHTAB_GUARD=1
+    sshtab record --exit-code "$ec" --raw "$raw" >/dev/null 2>&1
+    __sshtab_restore_guard "$prev_guard"
+    return
+  fi
+
+  if [[ -n $pending_command && ! $pending_command =~ ^ssh([[:space:]]|$) ]]; then
+    local prev_guard=${SSHTAB_GUARD:-}
+    SSHTAB_GUARD=1
+    sshtab add "$pending_command" >/dev/null 2>&1
+    __sshtab_restore_guard "$prev_guard"
   fi
 }
 
@@ -217,15 +227,10 @@ __sshtab_complete_command() {
     return 0
   fi
 
-  if [[ -n ${READLINE_LINE:-} ]]; then
-    READLINE_LINE="$command"
-    READLINE_POINT=${#READLINE_LINE}
-    COMPREPLY=()
-    return 0
-  fi
-
-  COMPREPLY=("$command")
-  compopt -o nospace 2>/dev/null
+  SSHTAB_CAPTURE_NEXT=1
+  READLINE_LINE="$command"
+  READLINE_POINT=${#READLINE_LINE}
+  COMPREPLY=()
   return 0
 }
 

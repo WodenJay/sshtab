@@ -50,7 +50,7 @@ make clean
 
 - 自动记录：执行成功（exit code 0）的 `ssh` 会写入历史。
 - 触发选择：输入 `ssh ` 后按 Tab，会弹出最近列表；↑/↓ 选择，Enter 回填，Esc/Ctrl+C 取消。
-- 通用选择：输入 `sshtab` 后按 Tab，会弹出命令列表并回填完整命令行。
+- 通用选择：输入 `sshtab ` 后按 Tab，会弹出命令列表并回填完整命令行。
 - 执行并记录：`sshtab <command...>` 执行命令并写入通用历史（仅 exit code 0）。
 - 仅添加记录：`sshtab add <command...>` 只写入通用历史，不执行。
 - 不影响原生补全：`ssh a<Tab>` 仍走原生 ssh/known_hosts 补全。
