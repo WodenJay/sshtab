@@ -33,14 +33,22 @@ namespace
   {
     std::cerr << "Usage:\n"
               << "  sshtab record --exit-code <int> --raw <raw_cmd>\n"
+              << "    Record a successful ssh command from hooks.\n"
               << "  sshtab add <command...>\n"
+              << "    Add a command to general history without executing.\n"
               << "  sshtab list --limit <N> [--with-ids]\n"
+              << "    List recent ssh commands.\n"
               << "  sshtab pick --limit <N> [--non-interactive --select <idx>]\n"
+              << "    Pick ssh args for completion.\n"
               << "  sshtab pick-command --limit <N> [--non-interactive --select <idx>]\n"
+              << "    Pick full command lines for sshtab completion.\n"
               << "  sshtab alias --name <alias> (--id <N> [--limit <N>] | --address <addr>)\n"
+              << "    Set or clear ssh alias display name.\n"
               << "  sshtab delete --index <N> [--limit <N>]\n"
               << "  sshtab delete --pick [--limit <N>]\n"
-              << "  sshtab exec <args_string>\n";
+              << "    Delete ssh history entries.\n"
+              << "  sshtab exec <args_string>\n"
+              << "    Execute ssh with safe tokenization.\n";
   }
 
   bool ParseIntArg(const char *arg, int *out)

@@ -4,7 +4,7 @@ Bash 下 `ssh <Tab>` 或 `sshtab <Tab>` 选择历史命令回填的工具。
 
 ## 项目介绍
 
-sshtab 是一个专注于 Bash 环境的命令行增强工具，用于解决“常用 SSH 目标难以快速复用”的问题。它在不改变你现有 `ssh` 使用习惯的前提下，提供一个轻量的交互式历史选择器：输入 `ssh` 后按 Tab，即可从最近成功连接的记录中选择并回填完整参数，继续编辑后再执行。
+sshtab 是一个专注于 Bash 环境的命令行增强工具，用于解决“常用 SSH 目标难以快速复用”的问题，同时提供通用命令历史选择。它在不改变你现有 `ssh` 使用习惯的前提下，提供一个轻量的交互式历史选择器：输入 `ssh` 后按 Tab，即可从最近成功连接的记录中选择并回填完整参数；输入 `sshtab` 后按 Tab，则可以选择任意命令并回填整行。
 
 核心特性：
 - 仅在 `ssh` + Tab 的空参数位置触发，不抢占原生 host 补全。
@@ -53,11 +53,20 @@ make clean
 - 通用选择：输入 `sshtab ` 后按 Tab，会弹出命令列表并回填完整命令行。
 - 执行并记录：`sshtab <command...>` 执行命令并写入通用历史（仅 exit code 0）。
 - 仅添加记录：`sshtab add <command...>` 只写入通用历史，不执行。
+- 命令选择输出：`sshtab pick-command` 输出完整命令行（可配合 `--non-interactive` 脚本调用）。
 - 不影响原生补全：`ssh a<Tab>` 仍走原生 ssh/known_hosts 补全。
+- 查看帮助：直接运行 `sshtab` 会输出 Usage。
 - 查看记录 ID：`sshtab list --with-ids`（默认仅显示最近 50 条，配合 `--limit` 调整）。
 - 删除记录：`sshtab delete --index <N>` 或 `sshtab delete --pick`。
 - 别名：在选择器中按 `n` 为当前条目设置/修改别名；按 Shift+Tab（或 `S`）在别名与地址显示间切换，别名仅用于展示。
 - 命令行别名：`sshtab alias --id <N> --name "<alias>"` 或 `sshtab alias --address "<args 或 ssh 命令>" --name "<alias>"`；`--name ""` 清除别名。
+
+## 数据文件
+
+- `~/.local/share/sshtab/history.log`：ssh 历史（仅 exit code 0）。
+- `~/.local/share/sshtab/commands.log`：通用命令历史（包含 ssh）。
+- `~/.local/share/sshtab/aliases.log`：ssh 别名。
+- `~/.local/share/sshtab/aliases_cmd.log`：通用命令别名。
 
 ## 卸载
 
