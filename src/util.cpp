@@ -63,12 +63,28 @@ std::string GetHistoryPath(std::string* err) {
   return dir + "/history.log";
 }
 
+std::string GetCommandHistoryPath(std::string* err) {
+  std::string dir = GetDataDir(err);
+  if (dir.empty()) {
+    return std::string();
+  }
+  return dir + "/commands.log";
+}
+
 std::string GetAliasPath(std::string* err) {
   std::string dir = GetDataDir(err);
   if (dir.empty()) {
     return std::string();
   }
   return dir + "/aliases.log";
+}
+
+std::string GetCommandAliasPath(std::string* err) {
+  std::string dir = GetDataDir(err);
+  if (dir.empty()) {
+    return std::string();
+  }
+  return dir + "/aliases_cmd.log";
 }
 
 bool EnsureDir(const std::string& path, std::string* err) {

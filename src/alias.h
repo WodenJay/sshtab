@@ -4,4 +4,6 @@
 #include <unordered_map>
 
 bool LoadAliases(std::unordered_map<std::string, std::string>* aliases, std::string* err);
+bool LoadCommandAliases(std::unordered_map<std::string, std::string>* aliases, std::string* err);
 bool SetAliasForArgs(const std::string& args, const std::string& alias, std::string* err);
+bool SetAliasForCommand(const std::string& command, const std::string& alias, std::string* err);

@@ -55,9 +55,13 @@ void CleanupDir(const std::string& dir) {
   }
   std::string data_dir = dir + "/sshtab";
   std::string history = data_dir + "/history.log";
+  std::string commands = data_dir + "/commands.log";
   std::string aliases = data_dir + "/aliases.log";
+  std::string command_aliases = data_dir + "/aliases_cmd.log";
   unlink(history.c_str());
+  unlink(commands.c_str());
   unlink(aliases.c_str());
+  unlink(command_aliases.c_str());
   rmdir(data_dir.c_str());
   rmdir(dir.c_str());
 }
@@ -145,6 +149,34 @@ void TestHistoryAndAlias() {
   EXPECT_TRUE(SetAliasForArgs("host1", "alias1", &err));
   EXPECT_TRUE(LoadAliases(&aliases, &err));
   EXPECT_EQ(aliases["host1"], "alias1");
+
+  EXPECT_TRUE(AppendCommandHistory("ls -la", 0, &err));
+  EXPECT_TRUE(AppendCommandHistory("ssh host1", 0, &err));
+  EXPECT_TRUE(AppendCommandHistory("echo bad", 1, &err));
+
+  auto command_entries = LoadRecentUniqueCommands(10, &err);
+  bool found_ls = false;
+  bool found_ssh = false;
+  bool found_bad = false;
+  for (const auto& e : command_entries) {
+    if (e.command == "ls -la") {
+      found_ls = true;
+    }
+    if (e.command == "ssh host1") {
+      found_ssh = true;
+    }
+    if (e.command == "echo bad") {
+      found_bad = true;
+    }
+  }
+  EXPECT_TRUE(found_ls);
+  EXPECT_TRUE(found_ssh);
+  EXPECT_FALSE(found_bad);
+
+  std::unordered_map<std::string, std::string> command_aliases;
+  EXPECT_TRUE(SetAliasForCommand("ls -la", "list", &err));
+  EXPECT_TRUE(LoadCommandAliases(&command_aliases, &err));
+  EXPECT_EQ(command_aliases["ls -la"], "list");
 
   CleanupDir(temp);
 }

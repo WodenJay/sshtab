@@ -1,6 +1,6 @@
 # sshtab
 
-Bash 下 `ssh <Tab>` 选择最近连接并回填命令的工具。
+Bash 下 `ssh <Tab>` 或 `sshtab <Tab>` 选择历史命令回填的工具。
 
 ## 项目介绍
 
@@ -8,7 +8,8 @@ sshtab 是一个专注于 Bash 环境的命令行增强工具，用于解决“�
 
 核心特性：
 - 仅在 `ssh` + Tab 的空参数位置触发，不抢占原生 host 补全。
-- 仅记录成功退出（exit code 0）的 `ssh` 命令。
+- `sshtab` + Tab 选择完整命令行并回填。
+- 仅记录成功退出（exit code 0）的 `ssh` 命令与 `sshtab` 执行命令。
 - 安全执行：不使用 eval/system，仅做最小 tokenization 后 exec 真正 ssh。
 - Bash-only，开箱即用，卸载可逆。
 
@@ -49,6 +50,9 @@ make clean
 
 - 自动记录：执行成功（exit code 0）的 `ssh` 会写入历史。
 - 触发选择：输入 `ssh ` 后按 Tab，会弹出最近列表；↑/↓ 选择，Enter 回填，Esc/Ctrl+C 取消。
+- 通用选择：输入 `sshtab` 后按 Tab，会弹出命令列表并回填完整命令行。
+- 执行并记录：`sshtab <command...>` 执行命令并写入通用历史（仅 exit code 0）。
+- 仅添加记录：`sshtab add <command...>` 只写入通用历史，不执行。
 - 不影响原生补全：`ssh a<Tab>` 仍走原生 ssh/known_hosts 补全。
 - 查看记录 ID：`sshtab list --with-ids`（默认仅显示最近 50 条，配合 `--limit` 调整）。
 - 删除记录：`sshtab delete --index <N>` 或 `sshtab delete --pick`。
@@ -95,6 +99,7 @@ curl -fsSL https://raw.githubusercontent.com/WodenJay/sshtab/main/scripts/uninst
 
 - `exec` 不使用 eval/system，仅做最小 tokenization 后 exec 真正 ssh。
 - 拒绝控制字符与明显 shell 元字符（`; | & \` $ ( ) < >`）。
+- 通用命令记录同样拒绝上述元字符。
 
 ## Acknowledge
 

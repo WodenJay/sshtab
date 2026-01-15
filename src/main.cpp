@@ -7,6 +7,7 @@
 
 #include <cerrno>
 #include <charconv>
+#include <cctype>
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
@@ -32,8 +33,10 @@ namespace
   {
     std::cerr << "Usage:\n"
               << "  sshtab record --exit-code <int> --raw <raw_cmd>\n"
+              << "  sshtab add <command...>\n"
               << "  sshtab list --limit <N> [--with-ids]\n"
               << "  sshtab pick --limit <N> [--non-interactive --select <idx>]\n"
+              << "  sshtab pick-command --limit <N> [--non-interactive --select <idx>]\n"
               << "  sshtab alias --name <alias> (--id <N> [--limit <N>] | --address <addr>)\n"
               << "  sshtab delete --index <N> [--limit <N>]\n"
               << "  sshtab delete --pick [--limit <N>]\n"
@@ -85,6 +88,138 @@ namespace
   bool HasControlChars(const std::string &s)
   {
     return ContainsControlChars(s);
+  }
+
+  bool NeedsSingleQuote(const std::string &arg)
+  {
+    if (arg.empty())
+    {
+      return true;
+    }
+    for (unsigned char c : arg)
+    {
+      if (std::isspace(c) || c == '\'')
+      {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  std::string QuoteSingle(const std::string &arg)
+  {
+    std::string out = "'";
+    size_t start = 0;
+    while (start < arg.size())
+    {
+      size_t pos = arg.find('\'', start);
+      if (pos == std::string::npos)
+      {
+        out += arg.substr(start);
+        break;
+      }
+      out += arg.substr(start, pos - start);
+      out += "'\\''";
+      start = pos + 1;
+    }
+    out += "'";
+    return out;
+  }
+
+  bool NormalizeCommandTokens(const std::vector<std::string> &tokens, std::string *out, std::string *err)
+  {
+    if (!out)
+    {
+      if (err)
+      {
+        *err = "command output pointer is null";
+      }
+      return false;
+    }
+    if (tokens.empty())
+    {
+      if (err)
+      {
+        *err = "command is empty";
+      }
+      return false;
+    }
+
+    std::string command;
+    for (const auto &token : tokens)
+    {
+      if (ContainsControlChars(token))
+      {
+        if (err)
+        {
+          *err = "command contains control characters";
+        }
+        return false;
+      }
+      if (ContainsForbiddenMetachars(token))
+      {
+        if (err)
+        {
+          *err = "command contains shell metacharacters";
+        }
+        return false;
+      }
+      std::string part = NeedsSingleQuote(token) ? QuoteSingle(token) : token;
+      if (!command.empty())
+      {
+        command += ' ';
+      }
+      command += part;
+    }
+    if (command.empty())
+    {
+      if (err)
+      {
+        *err = "command is empty";
+      }
+      return false;
+    }
+    *out = command;
+    return true;
+  }
+
+  bool NormalizeCommandRaw(const std::string &input, std::string *out, std::string *err)
+  {
+    if (!out)
+    {
+      if (err)
+      {
+        *err = "command output pointer is null";
+      }
+      return false;
+    }
+    std::string trimmed = TrimSpace(input);
+    if (trimmed.empty())
+    {
+      if (err)
+      {
+        *err = "command is empty";
+      }
+      return false;
+    }
+    if (ContainsControlChars(trimmed))
+    {
+      if (err)
+      {
+        *err = "command contains control characters";
+      }
+      return false;
+    }
+    if (ContainsForbiddenMetachars(trimmed))
+    {
+      if (err)
+      {
+        *err = "command contains shell metacharacters";
+      }
+      return false;
+    }
+    *out = trimmed;
+    return true;
   }
 
   std::vector<std::string> SplitArgsSimple(const std::string &args)
@@ -328,6 +463,53 @@ namespace
       std::cerr << "record failed: " << err << "\n";
       return 1;
     }
+    err.clear();
+    if (!AppendCommandHistory(normalized, exit_code, &err))
+    {
+      std::cerr << "record failed: " << err << "\n";
+      return 1;
+    }
+    return 0;
+  }
+
+  int CommandAdd(int argc, char **argv)
+  {
+    if (argc < 3)
+    {
+      std::cerr << "add requires a command" << "\n";
+      return 1;
+    }
+
+    std::string command;
+    std::string err;
+    if (argc == 3)
+    {
+      if (!NormalizeCommandRaw(argv[2], &command, &err))
+      {
+        std::cerr << "add failed: " << err << "\n";
+        return 1;
+      }
+    }
+    else
+    {
+      std::vector<std::string> tokens;
+      tokens.reserve(static_cast<std::size_t>(argc - 2));
+      for (int i = 2; i < argc; ++i)
+      {
+        tokens.emplace_back(argv[i]);
+      }
+      if (!NormalizeCommandTokens(tokens, &command, &err))
+      {
+        std::cerr << "add failed: " << err << "\n";
+        return 1;
+      }
+    }
+
+    if (!AppendCommandHistory(command, 0, &err))
+    {
+      std::cerr << "add failed: " << err << "\n";
+      return 1;
+    }
     return 0;
   }
 
@@ -527,6 +709,225 @@ namespace
     if (result == PickResult::kError && !err.empty())
     {
       std::cerr << "pick failed: " << err << "\n";
+    }
+    return 1;
+  }
+
+  int CommandPickCommand(int argc, char **argv)
+  {
+    std::size_t limit = 50;
+    bool non_interactive = false;
+    int select_idx = -1;
+
+    for (int i = 2; i < argc; ++i)
+    {
+      std::string arg = argv[i];
+      if (arg == "--limit")
+      {
+        if (i + 1 >= argc || !ParseSizeArg(argv[i + 1], &limit))
+        {
+          std::cerr << "Invalid --limit value\n";
+          return 1;
+        }
+        ++i;
+      }
+      else if (arg == "--non-interactive")
+      {
+        non_interactive = true;
+      }
+      else if (arg == "--select")
+      {
+        if (i + 1 >= argc || !ParseIntArg(argv[i + 1], &select_idx))
+        {
+          std::cerr << "Invalid --select value\n";
+          return 1;
+        }
+        ++i;
+      }
+      else
+      {
+        std::cerr << "Unknown argument: " << arg << "\n";
+        return 1;
+      }
+    }
+
+    std::string command_err;
+    std::vector<HistoryEntry> command_entries = LoadRecentUniqueCommands(limit, &command_err);
+    if (!command_err.empty() && command_entries.empty())
+    {
+      std::cerr << "pick-command warning: " << command_err << "\n";
+    }
+
+    std::string ssh_err;
+    std::vector<HistoryEntry> ssh_entries = LoadRecentUnique(limit, &ssh_err);
+    if (!ssh_err.empty() && ssh_entries.empty())
+    {
+      std::cerr << "pick-command warning: " << ssh_err << "\n";
+    }
+
+    std::unordered_map<std::string, HistoryEntry> merged;
+    for (const auto &entry : command_entries)
+    {
+      merged.emplace(entry.command, entry);
+    }
+    for (const auto &entry : ssh_entries)
+    {
+      if (merged.find(entry.command) == merged.end())
+      {
+        merged.emplace(entry.command, entry);
+      }
+    }
+
+    std::vector<HistoryEntry> entries;
+    entries.reserve(merged.size());
+    for (const auto &kv : merged)
+    {
+      entries.push_back(kv.second);
+    }
+
+    std::sort(entries.begin(), entries.end(), [](const HistoryEntry &a, const HistoryEntry &b)
+              {
+                if (a.last_used != b.last_used)
+                {
+                  return a.last_used > b.last_used;
+                }
+                if (a.count != b.count)
+                {
+                  return a.count > b.count;
+                }
+                return a.command < b.command;
+              });
+
+    if (limit > 0 && entries.size() > limit)
+    {
+      entries.resize(limit);
+    }
+
+    std::unordered_map<std::string, std::string> command_aliases;
+    std::string alias_err;
+    LoadCommandAliases(&command_aliases, &alias_err);
+
+    std::unordered_map<std::string, std::string> ssh_aliases;
+    std::string ssh_alias_err;
+    LoadAliases(&ssh_aliases, &ssh_alias_err);
+
+    std::vector<PickItem> items;
+    items.reserve(entries.size());
+    for (const auto &entry : entries)
+    {
+      if (HasControlChars(entry.command) || ContainsForbiddenMetachars(entry.command))
+      {
+        continue;
+      }
+      PickItem item;
+      item.display = entry.command;
+      item.args = entry.command;
+      auto alias_it = command_aliases.find(entry.command);
+      if (alias_it != command_aliases.end() && !HasControlChars(alias_it->second))
+      {
+        item.alias = alias_it->second;
+      }
+      if (item.alias.empty())
+      {
+        std::string args = ExtractArgsFromCommand(entry.command);
+        if (!args.empty())
+        {
+          auto ssh_alias_it = ssh_aliases.find(args);
+          if (ssh_alias_it != ssh_aliases.end() && !HasControlChars(ssh_alias_it->second))
+          {
+            item.alias = ssh_alias_it->second;
+          }
+        }
+      }
+      std::string args = ExtractArgsFromCommand(entry.command);
+      if (!args.empty())
+      {
+        SshMeta meta = ExtractSshMeta(args);
+        item.host = meta.host;
+        item.port = meta.port;
+        item.jump = meta.jump;
+        item.identity = meta.identity;
+      }
+      item.last_used = entry.last_used;
+      item.count = entry.count;
+      items.push_back(item);
+    }
+
+    if (items.empty())
+    {
+      return 1;
+    }
+
+    if (non_interactive)
+    {
+      if (select_idx < 0)
+      {
+        std::cerr << "--select is required in --non-interactive mode\n";
+        return 1;
+      }
+      if (static_cast<std::size_t>(select_idx) >= items.size())
+      {
+        return 1;
+      }
+      const std::string &command = items[select_idx].args;
+      if (HasControlChars(command) || ContainsForbiddenMetachars(command))
+      {
+        return 1;
+      }
+      std::cout << command << "\n";
+      return 0;
+    }
+
+    PickUiConfig config;
+    config.allow_alias_edit = true;
+    config.allow_display_toggle = true;
+    config.show_alias = true;
+
+    AliasUpdateFn alias_update = [&](const PickItem &item, const std::string &alias_input,
+                                     std::string *out_err) -> bool
+    {
+      std::string alias;
+      std::string alias_err;
+      if (!NormalizeAliasName(alias_input, &alias, &alias_err))
+      {
+        if (out_err)
+        {
+          *out_err = alias_err;
+        }
+        return false;
+      }
+      if (ContainsControlChars(item.args) || ContainsForbiddenMetachars(item.args))
+      {
+        if (out_err)
+        {
+          *out_err = "command contains invalid characters";
+        }
+        return false;
+      }
+      return SetAliasForCommand(item.args, alias, out_err);
+    };
+
+    std::string err;
+    std::size_t selected = 0;
+    PickResult result = RunPickTui(items, "sshtab pick-command (Enter select, Esc/Ctrl+C cancel)",
+                                   &selected, config, alias_update, &err);
+    if (result == PickResult::kSelected)
+    {
+      if (selected >= items.size())
+      {
+        return 1;
+      }
+      const std::string &command = items[selected].args;
+      if (HasControlChars(command) || ContainsForbiddenMetachars(command))
+      {
+        return 1;
+      }
+      std::cout << command << "\n";
+      return 0;
+    }
+    if (result == PickResult::kError && !err.empty())
+    {
+      std::cerr << "pick-command failed: " << err << "\n";
     }
     return 1;
   }
@@ -860,6 +1261,10 @@ int main(int argc, char **argv)
   {
     return CommandRecord(argc, argv);
   }
+  if (cmd == "add")
+  {
+    return CommandAdd(argc, argv);
+  }
   if (cmd == "list")
   {
     return CommandList(argc, argv);
@@ -867,6 +1272,10 @@ int main(int argc, char **argv)
   if (cmd == "pick")
   {
     return CommandPick(argc, argv);
+  }
+  if (cmd == "pick-command")
+  {
+    return CommandPickCommand(argc, argv);
   }
   if (cmd == "alias")
   {

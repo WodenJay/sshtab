@@ -51,14 +51,21 @@ bool ParseInt(const std::string& s, int* out) {
   }
 }
 
-}  // namespace
+bool AppendHistoryToPath(const std::string& path,
+                         const std::string& command,
+                         int exit_code,
+                         std::string* err) {
+  if (path.empty()) {
+    if (err) {
+      *err = "history path is empty";
+    }
+    return false;
+  }
 
-bool AppendHistory(const std::string& command, int exit_code, std::string* err) {
-  std::string path_err;
-  std::string dir = GetDataDir(&path_err);
+  std::string dir = DirnameFromPath(path);
   if (dir.empty()) {
     if (err) {
-      *err = path_err;
+      *err = "history directory is empty";
     }
     return false;
   }
@@ -66,7 +73,6 @@ bool AppendHistory(const std::string& command, int exit_code, std::string* err) 
     return false;
   }
 
-  std::string path = dir + "/history.log";
   int fd = open(path.c_str(), O_CREAT | O_WRONLY | O_APPEND | O_CLOEXEC, 0600);
   if (fd < 0) {
     if (err) {
@@ -89,13 +95,13 @@ bool AppendHistory(const std::string& command, int exit_code, std::string* err) 
   return WriteAllToFd(fd, line, err);
 }
 
-std::vector<HistoryEntry> LoadRecentUnique(std::size_t limit, std::string* err) {
+std::vector<HistoryEntry> LoadRecentUniqueFromPath(const std::string& path,
+                                                   std::size_t limit,
+                                                   std::string* err) {
   std::vector<HistoryEntry> result;
-  std::string path_err;
-  std::string path = GetHistoryPath(&path_err);
   if (path.empty()) {
     if (err) {
-      *err = path_err;
+      *err = "history path is empty";
     }
     return result;
   }
@@ -194,6 +200,56 @@ std::vector<HistoryEntry> LoadRecentUnique(std::size_t limit, std::string* err) 
   }
 
   return result;
+}
+
+}  // namespace
+
+bool AppendHistory(const std::string& command, int exit_code, std::string* err) {
+  std::string path_err;
+  std::string path = GetHistoryPath(&path_err);
+  if (path.empty()) {
+    if (err) {
+      *err = path_err;
+    }
+    return false;
+  }
+  return AppendHistoryToPath(path, command, exit_code, err);
+}
+
+bool AppendCommandHistory(const std::string& command, int exit_code, std::string* err) {
+  std::string path_err;
+  std::string path = GetCommandHistoryPath(&path_err);
+  if (path.empty()) {
+    if (err) {
+      *err = path_err;
+    }
+    return false;
+  }
+  return AppendHistoryToPath(path, command, exit_code, err);
+}
+
+std::vector<HistoryEntry> LoadRecentUnique(std::size_t limit, std::string* err) {
+  std::string path_err;
+  std::string path = GetHistoryPath(&path_err);
+  if (path.empty()) {
+    if (err) {
+      *err = path_err;
+    }
+    return std::vector<HistoryEntry>();
+  }
+  return LoadRecentUniqueFromPath(path, limit, err);
+}
+
+std::vector<HistoryEntry> LoadRecentUniqueCommands(std::size_t limit, std::string* err) {
+  std::string path_err;
+  std::string path = GetCommandHistoryPath(&path_err);
+  if (path.empty()) {
+    if (err) {
+      *err = path_err;
+    }
+    return std::vector<HistoryEntry>();
+  }
+  return LoadRecentUniqueFromPath(path, limit, err);
 }
 
 bool DeleteHistoryCommand(const std::string& command, int* removed, std::string* err) {

@@ -1,177 +1,151 @@
-# SSHTab Agent Plan
+# SSHTab Agent Guide
 
 ## Purpose
-Build `sshtab`, a Bash-first helper that provides interactive recent SSH selection on `ssh<Tab>`, safely executes `ssh '<args>'`, and records only successful SSH commands for history.
+- Build `sshtab`, a Bash-first helper for `ssh<Tab>` history selection.
+- Provide a safe `sshtab exec` path that never shells out.
+- Record only successful `ssh` commands for reuse.
 
 ## Scope
-- C++ CLI with subcommands: `record`, `list`, `pick`, `exec` (plus optional `gc` later).
-- Bash integration: completion, proxy `ssh()` function, and hooks for record-on-success.
-- Installer/uninstaller scripts that inject/remove a marked bashrc snippet.
-- GitHub-ready project structure and release build pipeline.
+- C++17 CLI with subcommands: `record`, `list`, `pick`, `exec`, `alias`, `delete`.
+- Bash integration: completion, proxy `ssh()`, pre/post hooks.
+- Install/uninstall scripts that manage a marked bashrc snippet.
+- Minimal dependencies (no fzf/ncurses/sqlite).
 
-## Non-Goals (v1)
+## Non-goals (v1)
 - Support shells other than Bash.
-- External dependencies (e.g., fzf, ncurses, sqlite).
-- Executing arbitrary shell expressions through `exec`.
+- Execute arbitrary shell expressions.
+- Persist data outside XDG user paths.
 
-## Architecture Overview
-### Runtime Flow
+## Runtime flow
 1) User types `ssh` and presses Tab.
-2) Bash completion calls `sshtab pick`.
-3) `pick` shows TUI via `/dev/tty`, returns selected args on stdout.
-4) Completion inserts a single quoted argument: `ssh '<args>'`.
-5) User hits Enter; proxy `ssh()` calls `sshtab exec "<args>"`.
-6) `exec` tokenizes args safely and `execvp` into `ssh` via PATH (no shell).
-7) If no existing DEBUG trap, it captures raw command strings; prompt hook records only if exit code is 0. If a DEBUG trap already exists, pre-hook is disabled for the session.
+2) Bash completion runs `sshtab pick`.
+3) `pick` shows TUI via `/dev/tty`, returns args on stdout.
+4) Completion inserts a single quoted arg: `ssh '<args>'`.
+5) User presses Enter; proxy `ssh()` calls `sshtab exec "<args>"`.
+6) `exec` tokenizes args and `execvp` into real `ssh`.
+7) Post-hook records if exit code is 0 and command was `ssh`.
 
-### Project Layout
-- `src/main.cpp` CLI entry and dispatch.
-- `src/history.{h,cpp}` read/append history, dedupe, sort.
-- `src/normalize.{h,cpp}` normalize raw ssh commands.
-- `src/tokenize.{h,cpp}` tokenize args string for `exec`.
-- `src/tui.{h,cpp}` /dev/tty UI.
-- `src/util.{h,cpp}` XDG paths, base64, string helpers.
-- `scripts/install.sh` install binary + bash integration.
-- `scripts/uninstall.sh` remove integration.
-- `scripts/install-remote.sh` curl-based installer.
-- `scripts/uninstall-remote.sh` curl-based uninstaller.
-- `bash/sshtab.bash` snippet with proxy, hooks, completion.
-- `README.md` usage, install, uninstall, safety.
-- `.github/workflows/release.yml` build artifacts.
+## Project map
+- `src/main.cpp`: CLI parsing + command handlers.
+- `src/history.{h,cpp}`: history log append/read/dedupe/delete.
+- `src/alias.{h,cpp}`: alias storage for args display.
+- `src/normalize.{h,cpp}`: normalize raw ssh strings.
+- `src/tokenize.{h,cpp}`: arg tokenizer + safety checks.
+- `src/tui.{h,cpp}`: /dev/tty TUI selector.
+- `src/util.{h,cpp}`: XDG paths, base64, file/lock helpers.
+- `bash/sshtab.bash`: proxy function, hooks, completion.
+- `scripts/*.sh`: install/uninstall helpers.
+- `tests/test_main.cpp`: simple test runner.
 
-## Subcommand Boundaries
-### `sshtab record --exit-code N --raw "<raw_cmd>"`
-- Input: raw command string (from Bash), exit code.
-- Behavior: only record if exit code is 0 and command name is exactly `ssh`.
-- Output: none; writes to history log with file lock.
-- No UI; no stdout unless error.
+## Build / test / lint
+- Build: `make` (outputs `./sshtab`).
+- Clean: `make clean`.
+- Tests: `make test` or run `./sshtab_tests` directly.
+- Single test: no filter support; temporarily call only one test in `tests/test_main.cpp`.
+- Compiler: `g++` with `-std=c++17 -O2 -Wall -Wextra -pedantic`.
+- Override compiler: `CXX=clang++ make`.
+- Lint/format: no lint target or formatter configured; avoid reformatting.
 
-### `sshtab list --limit N`
-- Input: limit (default 50).
-- Behavior: read history, dedupe by command, sort by last-used desc.
-- Output: one command per line to stdout.
-- No UI; no modification.
+## CLI command contracts
+- `record --exit-code N --raw "<raw_cmd>"`: ignore unless exit code 0 and command is `ssh`.
+- `list --limit N [--with-ids]`: prints one command per line.
+- `pick --limit N [--non-interactive --select <idx>]`: stdout only selected args.
+- `pick` must return non-zero on cancel or invalid output.
+- `alias --name <alias> (--id <N> | --address <addr>)`: set or clear alias.
+- `delete --index <N>` or `delete --pick`: remove history entries.
+- `exec "<args_string>"`: tokenize and `execvp` real ssh.
 
-### `sshtab pick --limit N`
-- Input: limit (default 50).
-- Behavior: TUI selection in `/dev/tty`; stdout only selected args (without `ssh`).
-- Output: args string or empty; non-zero exit on cancel.
-- Output must be a single line of plain text; if the selected args contain newline or control characters, treat as cancel/failure and return non-zero.
-- Must not pollute stdout during UI.
-- Optional: `--non-interactive --select <idx>` returns the args at the index without UI (test-only).
-
-### `sshtab exec "<args_string>"`
-- Input: single string that may contain spaces.
-- Behavior: tokenize with a minimal shell-like parser (spaces, quotes, backslashes).
-- Reject if contains shell metacharacters: `; | & \` $ ( ) < >`.
-- Reject if input contains any control characters (ASCII < 0x20 or 0x7f), including `\n`, `\r`, and `\0`; return non-zero.
-- Execute `ssh` via `execvp` (PATH resolution, no shell).
-
-## Module Responsibilities
-- `main`: argument parsing, dispatch, exit codes.
-- `history`: XDG path resolution, file locking, append log, read and parse log, dedupe and sort.
-- `normalize`: detect ssh invocation, trim whitespace, unwrap single/double quotes for `ssh '<args>'` forms.
-- `tokenize`: split args string into argv tokens; no environment expansion or command substitution.
-- `tui`: raw mode, key handling, redraw; input/output via `/dev/tty`.
-- `util`: XDG paths, base64 encode/decode, string helpers.
-- `bash/sshtab.bash`: proxy function, hooks, completion; no side effects unless in interactive shell.
-
-## Data Model
+## Data model
 - Data dir: `${XDG_DATA_HOME:-$HOME/.local/share}/sshtab/`.
-- Log file: `history.log`.
-- Line format: `epoch_seconds<TAB>exit_code<TAB>base64(command_utf8)`.
-- Parsing: skip malformed lines; only accept base64 decode success.
+- History log: `history.log`.
+- Alias log: `aliases.log`.
+- History line format: `epoch<TAB>exit_code<TAB>base64(command_utf8)`.
+- Alias line format: `base64(args)<TAB>base64(alias)`.
+- Skip malformed lines or failed base64 decodes.
+- Only exit code 0 entries are kept in history reads.
 
-## Bash Integration Rules
-- Resolve real ssh path before defining the `ssh()` proxy; do not resolve after the proxy is in scope.
-- Resolution must return an executable file path (prefer `type -P ssh` or an equivalent that ignores aliases/functions).
-- If resolution fails, the snippet must disable the `ssh()` proxy and avoid `sshtab exec` usage, and it must print a warning to the user (do not hard-fail or recurse).
-- Cache the resolved path in a snippet variable (e.g., `SSHTAB_REAL_SSH`) and proxy `ssh()` must call `command "$SSHTAB_REAL_SSH" "$@"`.
-- Proxy `ssh()` delegates to real ssh unless exactly one argument with spaces.
-- Completion MUST trigger only when the input is exactly `ssh` or `ssh ` and the host-position word is empty.
-- If the current word is non-empty (even one character), sshtab MUST return empty `COMPREPLY` and let native ssh completion handle it.
-- Completion inserts a single quoted arg using single-quote-safe concatenation (e.g., `'\''` pattern) and must avoid `$'...'` or any quoting that interprets escape sequences.
-- Quoting must preserve byte-equivalence with the original args; no quoting strategy may transform backslashes or escape sequences.
-- Completion must also set `compopt -o nospace` to avoid an extra space breaking the quoted argument.
-- Completion must treat `pick` output as a single-line payload; if output contains newline or control characters, treat as cancel/failure and return no completion.
-- Quote strategy must cover single quotes in args without using escape-interpreting forms; never emit an unterminated or partially escaped string.
-- Completion compatibility mode (MUST):
-  - Provide a mode switch `SSHTAB_COMPLETION_MODE=always|fallback`.
-  - In `fallback` mode (default), if `sshtab pick` cancels/fails or history is empty, the completion must return success with empty `COMPREPLY`, not altering the command line, allowing native ssh completion to proceed.
-- Hooks only active for interactive shells; use guard to avoid recursion.
-- `PROMPT_COMMAND` must run sshtab post-hook first (prepend). The first line of the post-hook must capture the previous exit code: `ec=$?`.
-- Reason: user `PROMPT_COMMAND` entries can overwrite `$?`, so recording must capture it before any other command runs.
-- `PROMPT_COMMAND` composition must be idempotent; reinstalling must not insert duplicate hooks, and sshtab hook must remain first.
-- Install strategy must preserve existing `PROMPT_COMMAND`:
-  - If `PROMPT_COMMAND` is an array, unshift the sshtab post-hook function to index 0 if not present.
-  - If it is a string, prefix with `__sshtab_post_hook;` (or equivalent) only if not already present.
-- DEBUG trap must not clobber existing traps; see "DEBUG Trap Compatibility" below.
-- Snippet is idempotent with begin/end markers.
+## Code style (C++)
+- Language standard: C++17 only.
+- Indentation: 2 spaces; no tabs.
+- Braces: follow the file's existing style (K&R or Allman); do not reformat.
+- Includes: own header first, then other project headers, then C++ stdlib, then POSIX.
+- Naming:
+- Types/structs/functions use `PascalCase`.
+- Variables/parameters use `snake_case`.
+- Constants use `kConstant` prefix.
+- Enum classes use `kValue` enumerators.
+- Prefer `const` where possible; pass by `const&` for large objects.
+- Prefer `std::string`, `std::vector`, `std::size_t` over raw buffers.
+- Avoid `using namespace`; qualify `std::`.
+- Use `auto` only when the type is obvious from context.
+- Keep functions small and cohesive; add helpers in the same module.
+- Do not add inline comments unless necessary.
+- Error handling: return `bool`/`int`, set `std::string* err` when provided.
+- CLI errors: print to `std::cerr` with actionable messages.
+- Always validate pointer arguments before dereferencing.
+- For syscalls: check return codes, handle `EINTR`, and include `errno` details.
+- Use RAII wrappers `ScopedFd` and `FlockGuard` for fd lifetime/locking.
+- Avoid exceptions for control flow; functions should be noexcept by default.
 
-## DEBUG Trap Compatibility (Pre-Hook)
-Strategy (v1): do not chain. If a DEBUG trap already exists, sshtab disables its pre-hook for the session and warns once, keeping only the PROMPT_COMMAND post-hook (recording disabled).
-Implementation notes:
-- If no existing trap, set DEBUG to only run `__sshtab_pre_hook`.
-- If an existing trap is found, set `SSHTAB_PREHOOK_ENABLED=0`, emit a one-time warning, and do not install a DEBUG trap.
-Practical rules (MUST):
-- Never replace or override an existing DEBUG trap.
-- Do not attempt chaining or secondary parsing of the existing trap.
-Guard rules:
-- Any sshtab-invoked helper (`record`, `pick`, `exec`) must not trigger pre-hook.
-- The ssh() proxy must set `SSHTAB_GUARD=1` immediately on entry and clear it before return.
-- The pre-hook must return immediately when `SSHTAB_GUARD` is set.
-- The pre-hook must only capture user-entered `ssh` commands and must ignore internal calls such as `sshtab ...` or `command "$SSHTAB_REAL_SSH" ...` when guard is not set.
-- The pre-hook MUST only run in interactive shells (`[[ $- == *i* ]]`).
-- The pre-hook MUST match the command name token `ssh` strictly (e.g., regex `^ssh([[:space:]]|$)`), not a substring.
-Pre-hook disabled behavior (MUST):
-- If pre-hook is disabled (e.g., `SSHTAB_PREHOOK_ENABLED=0`), post-hook MUST return immediately and MUST NOT call `sshtab record`.
-- Warning/notice about disabled pre-hook MUST be shown at most once per shell session to avoid prompt spam.
+## Shell style (scripts/snippet)
+- Use `#!/usr/bin/env bash` and `set -euo pipefail`.
+- Quote variable expansions; avoid unquoted globs.
+- Prefer `[[ ... ]]` for tests and `case` for PATH checks.
+- Avoid `eval` and external dependencies.
+- Keep install/uninstall idempotent and guard with markers.
+- Send user-facing errors to stderr.
 
-## Record Boundary Rules
-- Pre-hook stores only the raw command string for user-entered `ssh ...`; it must not store commands issued by sshtab itself.
-- Post-hook must call `sshtab record` with guard enabled to avoid recursive capture.
-- `record` must re-validate that the normalized command name is exactly `ssh`; if not, it must ignore the entry.
+## Bash integration rules (high priority)
+- Trigger completion only when the line is exactly `ssh` or `ssh `.
+- If current word is non-empty, return empty `COMPREPLY` to allow native completion.
+- `pick` must not write to stdout during UI; only final args line allowed.
+- Completion inserts a single quoted arg using the `\'\''` pattern.
+- Do not use `$'...'` or any quoting that interprets escapes.
+- Always set `compopt -o nospace` to prevent trailing spaces.
+- Treat pick output as single-line payload; reject control chars/newlines.
+- Completion mode: `SSHTAB_COMPLETION_MODE=always|fallback` (default fallback).
+- Fallback mode: cancel/failure/empty history returns success with empty `COMPREPLY`.
+- Resolve real ssh path (e.g., `type -P ssh`) before defining proxy.
+- Cache result as `SSHTAB_REAL_SSH`; proxy uses `command "$SSHTAB_REAL_SSH" "$@"`.
+- If real ssh cannot be resolved, disable proxy and warn once.
+- Proxy `ssh()` only intercepts when exactly one argument contains spaces.
+- Hooks only run in interactive shells; guard internal calls with `SSHTAB_GUARD=1`.
+- `PROMPT_COMMAND` must prepend post-hook and capture `ec=$?` on first line.
+- Composition must be idempotent; avoid duplicate hooks.
 
-## Allowed / Forbidden Behaviors
-Allowed:
-- Read and write only to XDG data dir and user-local paths.
-- Use `/dev/tty` for TUI I/O.
-- Fail fast on invalid input and return non-zero.
+## DEBUG trap compatibility
+- Do not override an existing DEBUG trap.
+- If a DEBUG trap exists, set `SSHTAB_PREHOOK_ENABLED=0` and warn once.
+- When pre-hook is disabled, post-hook must return immediately.
+- Pre-hook must match command name strictly: `^ssh([[:space:]]|$)`.
+- Pre-hook ignores internal `sshtab` helper calls (guarded).
 
-Forbidden:
-- Running `/bin/sh`, `eval`, or executing arbitrary shell strings.
-- Overwriting `PROMPT_COMMAND` or putting sshtab post-hook after existing commands.
-- Replacing or chaining a user DEBUG trap; if one exists, pre-hook must be disabled with a warning.
-- Writing to stdout from `pick` except the final selection line.
-- Recording commands that are not `ssh` or have non-zero exit codes.
-- Hardcoding `/usr/bin/ssh` or assuming a fixed ssh path.
-- Global key binding or changes outside the marked bashrc block.
+## Exec/record safety rules
+- `record` only writes when exit code is 0 and normalized command is `ssh`.
+- `record` ignores inputs containing control characters.
+- `exec` rejects control chars and shell metacharacters ``; | & \` $ ( ) < >``.
+- `exec` uses tokenizer output directly and calls `execvp` (no shell).
+- Reject pick output containing control characters or newlines.
 
-## Development Order
-1) Core utilities: XDG path, base64 encode/decode, file lock helpers.
-2) History read/append + dedupe logic (unit tests).
-3) Normalization for `record` and args extraction for `pick`.
-4) Tokenizer + `exec` safety checks (unit tests).
-5) CLI dispatch + `record` and `list` commands.
-6) TUI `pick` with /dev/tty handling.
-7) Bash snippet (proxy, hooks, completion).
-8) Install/uninstall scripts with idempotent markers.
-9) README + GitHub Actions release workflow.
+## Install/uninstall rules
+- Scripts must inject/remove only the marked bashrc snippet.
+- Re-running install/uninstall must be idempotent.
+- Uninstall may optionally remove data (`--purge` in scripts).
+- Do not hardcode `/usr/bin/ssh`; resolve via PATH in bash snippet.
 
-## Acceptance Criteria
-- `ssh<Tab>` or `ssh <Tab>` opens TUI with recent commands.
-- Selecting a command inserts `ssh '<args>'` on the prompt.
-- Running that command uses `execvp` to launch `ssh` via PATH (no shell) and succeeds.
-- Only exit code 0 SSH commands are recorded.
-- Recents are unique and sorted by most recent.
-- Normal SSH completions remain unaffected outside the exact trigger case.
-- Uninstall removes bashrc block and binary; data removal is optional.
-- If a DEBUG trap already exists, sshtab disables pre-hook and warns instead of modifying the trap.
-- In `fallback` completion mode, pick cancel/failure/empty history yields native ssh completion.
-- When pre-hook is disabled, no new entries are written to `history.log`.
-- Typing `ssh a<Tab>` must use native ssh host/known_hosts completion.
+## Tests style
+- Tests live in `tests/test_main.cpp` with simple `EXPECT_*` macros.
+- Keep tests deterministic; use temp dirs under `/tmp`.
+- Use `XDG_DATA_HOME` overrides for file system tests.
+- Cleanup temp data on success/failure.
+- Prefer small helper functions near the test that uses them.
 
-## Open Questions / Assumptions
-- `record` matches only `ssh` as the command name (no `sudo ssh` capture).
-- `exec` rejects shell metacharacters even if ssh could accept them.
-- Completion UI uses /dev/tty and ANSI codes; no external dependencies.
+## Assumptions
+- `record` captures only plain `ssh` (no `sudo ssh`).
+- `pick` output must be single line; newline/control chars cancel.
+- TUI reads/writes only `/dev/tty`.
+- Native ssh completion should remain available outside the exact trigger.
+
+## Cursor/Copilot rules
+- No `.cursor/rules`, `.cursorrules`, or `.github/copilot-instructions.md` found.
+

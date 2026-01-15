@@ -21,6 +21,26 @@ __sshtab_quote_single() {
   printf '%s' "$out"
 }
 
+__sshtab_restore_guard() {
+  local prev="$1"
+  if [[ -n $prev ]]; then
+    SSHTAB_GUARD=$prev
+  else
+    unset SSHTAB_GUARD
+  fi
+}
+
+__sshtab_is_subcommand() {
+  case "$1" in
+    record|list|pick|pick-command|alias|delete|exec|add)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
 __sshtab_detect_prev_completion() {
   local spec
   spec=$(complete -p ssh 2>/dev/null) || return
@@ -75,6 +95,34 @@ if [[ ${SSHTAB_SSH_PROXY_ENABLED} -eq 1 ]]; then
     return $rc
   }
 fi
+
+sshtab() {
+  local prev_guard=${SSHTAB_GUARD:-}
+  if [[ $# -eq 0 ]]; then
+    SSHTAB_GUARD=1
+    command sshtab
+    local rc=$?
+    __sshtab_restore_guard "$prev_guard"
+    return $rc
+  fi
+
+  if [[ $1 == -* ]] || __sshtab_is_subcommand "$1"; then
+    SSHTAB_GUARD=1
+    command sshtab "$@"
+    local rc=$?
+    __sshtab_restore_guard "$prev_guard"
+    return $rc
+  fi
+
+  command "$@"
+  local rc=$?
+  if [[ $rc -eq 0 ]]; then
+    SSHTAB_GUARD=1
+    command sshtab add "$@" >/dev/null 2>&1
+    __sshtab_restore_guard "$prev_guard"
+  fi
+  return $rc
+}
 
 __sshtab_pre_hook() {
   [[ $- == *i* ]] || return
@@ -150,6 +198,37 @@ __sshtab_complete() {
   return 0
 }
 
+__sshtab_complete_command() {
+  local line_prefix="${COMP_LINE:0:COMP_POINT}"
+
+  if [[ ! $line_prefix =~ ^[[:space:]]*sshtab[[:space:]]*$ ]]; then
+    COMPREPLY=()
+    return 0
+  fi
+
+  local command
+  command=$(sshtab pick-command --limit "${SSHTAB_LIMIT}" 2>/dev/null) || {
+    COMPREPLY=()
+    return 0
+  }
+
+  if [[ -z $command || $command =~ [[:cntrl:]] ]]; then
+    COMPREPLY=()
+    return 0
+  fi
+
+  if [[ -n ${READLINE_LINE:-} ]]; then
+    READLINE_LINE="$command"
+    READLINE_POINT=${#READLINE_LINE}
+    COMPREPLY=()
+    return 0
+  fi
+
+  COMPREPLY=("$command")
+  compopt -o nospace 2>/dev/null
+  return 0
+}
+
 if [[ $- == *i* ]]; then
   if [[ -n $(trap -p DEBUG) ]]; then
     SSHTAB_PREHOOK_ENABLED=0
@@ -193,4 +272,10 @@ if [[ $- == *i* ]]; then
     complete -F __sshtab_complete ssh
   fi
   unset __sshtab_spec
+
+  __sshtab_cmd_spec=$(complete -p sshtab 2>/dev/null)
+  if [[ ${__sshtab_cmd_spec} != *"__sshtab_complete_command"* ]]; then
+    complete -F __sshtab_complete_command sshtab
+  fi
+  unset __sshtab_cmd_spec
 fi

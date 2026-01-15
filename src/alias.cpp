@@ -87,12 +87,12 @@ namespace
       out += '\n';
     }
 
-    return WriteAllToFd(fd, out, err);
-  }
+  return WriteAllToFd(fd, out, err);
+}
 
-} // namespace
-
-bool LoadAliases(std::unordered_map<std::string, std::string> *aliases, std::string *err)
+bool LoadAliasesFromPath(const std::string &path,
+                         std::unordered_map<std::string, std::string> *aliases,
+                         std::string *err)
 {
   if (!aliases)
   {
@@ -104,13 +104,11 @@ bool LoadAliases(std::unordered_map<std::string, std::string> *aliases, std::str
   }
   aliases->clear();
 
-  std::string path_err;
-  std::string path = GetAliasPath(&path_err);
   if (path.empty())
   {
     if (err)
     {
-      *err = path_err;
+      *err = "alias path is empty";
     }
     return false;
   }
@@ -146,33 +144,43 @@ bool LoadAliases(std::unordered_map<std::string, std::string> *aliases, std::str
   return true;
 }
 
-bool SetAliasForArgs(const std::string &args, const std::string &alias, std::string *err)
+bool SetAliasForKeyAtPath(const std::string &path,
+                          const std::string &key,
+                          const std::string &alias,
+                          std::string *err)
 {
-  if (args.empty())
+  if (key.empty())
   {
     if (err)
     {
-      *err = "args is empty";
+      *err = "alias key is empty";
     }
     return false;
   }
 
-  std::string path_err;
-  std::string dir = GetDataDir(&path_err);
-  if (dir.empty())
+  if (path.empty())
   {
     if (err)
     {
-      *err = path_err;
+      *err = "alias path is empty";
     }
     return false;
   }
-  if (!EnsureDir(dir, err))
+
+  std::string dir_path = DirnameFromPath(path);
+  if (dir_path.empty())
+  {
+    if (err)
+    {
+      *err = "alias directory is empty";
+    }
+    return false;
+  }
+  if (!EnsureDir(dir_path, err))
   {
     return false;
   }
 
-  std::string path = dir + "/aliases.log";
   int fd = open(path.c_str(), O_RDWR | O_CREAT | O_CLOEXEC, 0600);
   if (fd < 0)
   {
@@ -200,14 +208,13 @@ bool SetAliasForArgs(const std::string &args, const std::string &alias, std::str
 
   if (alias.empty())
   {
-    aliases.erase(args);
+    aliases.erase(key);
   }
   else
   {
-    aliases[args] = alias;
+    aliases[key] = alias;
   }
 
-  std::string dir_path = DirnameFromPath(path);
   std::string tmp_path;
   ScopedFd tmp_guard;
   {
@@ -256,4 +263,67 @@ bool SetAliasForArgs(const std::string &args, const std::string &alias, std::str
     return false;
   }
   return true;
+}
+
+} // namespace
+
+
+bool LoadAliases(std::unordered_map<std::string, std::string> *aliases, std::string *err)
+{
+  std::string path_err;
+  std::string path = GetAliasPath(&path_err);
+  if (path.empty())
+  {
+    if (err)
+    {
+      *err = path_err;
+    }
+    return false;
+  }
+  return LoadAliasesFromPath(path, aliases, err);
+}
+
+bool LoadCommandAliases(std::unordered_map<std::string, std::string> *aliases, std::string *err)
+{
+  std::string path_err;
+  std::string path = GetCommandAliasPath(&path_err);
+  if (path.empty())
+  {
+    if (err)
+    {
+      *err = path_err;
+    }
+    return false;
+  }
+  return LoadAliasesFromPath(path, aliases, err);
+}
+
+bool SetAliasForArgs(const std::string &args, const std::string &alias, std::string *err)
+{
+  std::string path_err;
+  std::string path = GetAliasPath(&path_err);
+  if (path.empty())
+  {
+    if (err)
+    {
+      *err = path_err;
+    }
+    return false;
+  }
+  return SetAliasForKeyAtPath(path, args, alias, err);
+}
+
+bool SetAliasForCommand(const std::string &command, const std::string &alias, std::string *err)
+{
+  std::string path_err;
+  std::string path = GetCommandAliasPath(&path_err);
+  if (path.empty())
+  {
+    if (err)
+    {
+      *err = path_err;
+    }
+    return false;
+  }
+  return SetAliasForKeyAtPath(path, command, alias, err);
 }
