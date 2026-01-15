@@ -227,21 +227,10 @@ __sshtab_complete_command() {
     return 0
   fi
 
-  if [[ -n ${READLINE_LINE+x} ]]; then
-    SSHTAB_CAPTURE_NEXT=1
-    READLINE_LINE="$command"
-    READLINE_POINT=${#READLINE_LINE}
-    COMPREPLY=()
-    return 0
-  fi
-
   SSHTAB_CAPTURE_NEXT=1
-  COMP_LINE="$command"
-  COMP_POINT=${#COMP_LINE}
-  COMP_WORDS=("$command")
-  COMP_CWORD=0
-  COMPREPLY=("$command")
-  compopt -o nospace 2>/dev/null
+  READLINE_LINE="$command"
+  READLINE_POINT=${#READLINE_LINE}
+  COMPREPLY=()
   return 0
 }
 
