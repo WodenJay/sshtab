@@ -249,7 +249,7 @@ std::string PickItemLabel(const PickItem& item, bool show_alias) {
   return item.display;
 }
 
-std::string BuildHintText(const PickUiConfig& config, bool show_alias, size_t selected, size_t total) {
+std::string BuildHintText(const PickUiConfig& config, bool show_alias, size_t /*selected*/, size_t /*total*/) {
   std::vector<std::string> parts;
   parts.push_back("Up/Down: move");
   parts.push_back("Enter: select");
@@ -261,7 +261,7 @@ std::string BuildHintText(const PickUiConfig& config, bool show_alias, size_t se
     parts.push_back("d: delete");
   }
   if (config.allow_display_toggle) {
-    parts.push_back(show_alias ? "Shift+Tab or S: view=alias" : "Shift+Tab or S: view=addr");
+    parts.push_back(show_alias ? "S/<Shift+Tab>: addr" : "S/<Shift+Tab>: alias");
   }
   std::string hint;
   for (size_t i = 0; i < parts.size(); ++i) {
@@ -270,10 +270,6 @@ std::string BuildHintText(const PickUiConfig& config, bool show_alias, size_t se
     }
     hint += parts[i];
   }
-  hint += "  ";
-  hint += std::to_string(selected + 1);
-  hint += "/";
-  hint += std::to_string(total);
   return hint;
 }
 

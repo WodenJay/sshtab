@@ -4,7 +4,7 @@ Bash 下 `ssh <Tab>` 或 `sshtab <Tab>` 选择历史命令回填的工具。
 
 ## 项目介绍
 
-sshtab 是一个专注于 Bash 环境的命令行增强工具，用于解决“常用 SSH 目标难以快速复用”的问题，同时提供通用命令历史选择。它在不改变你现有 `ssh` 使用习惯的前提下，提供一个轻量的交互式历史选择器：输入 `ssh` 后按 Tab，即可从最近成功连接的记录中选择并回填完整参数；输入 `sshtab` 后按 Tab，则可以选择任意命令并回填整行。
+sshtab 是一个专注于 Bash 环境的命令行增强工具，用于解决“常用 SSH 目标难以快速复用”的问题，同时提供通用命令历史选择。它在不改变你现有 `ssh` 使用习惯的前提下，提供一个轻量的交互式历史选择器：输入 `ssh` 后按 Tab，即可从最近成功连接的记录中选择并回填完整参数；输入 `sshtab ` 后按 Tab，则可以选择任意命令并回填整行。
 
 核心特性：
 - 仅在 `ssh` + Tab 的空参数位置触发，不抢占原生 host 补全。
@@ -112,4 +112,4 @@ curl -fsSL https://raw.githubusercontent.com/WodenJay/sshtab/main/scripts/uninst
 
 ## Acknowledge
 
-代码由codex编写
+代码由AI辅助编写
