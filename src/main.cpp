@@ -513,6 +513,18 @@ namespace
       }
     }
 
+    if (command.size() >= 7 && command.rfind("sshtab ", 0) == 0)
+    {
+      command = command.substr(7);
+      size_t first = command.find_first_not_of(' ');
+      if (first == std::string::npos)
+      {
+        std::cerr << "add failed: command empty after stripping sshtab prefix\n";
+        return 1;
+      }
+      command = command.substr(first);
+    }
+
     if (!AppendCommandHistory(command, 0, &err))
     {
       std::cerr << "add failed: " << err << "\n";
