@@ -21,12 +21,14 @@ struct PickItem {
 struct PickUiConfig {
   bool allow_alias_edit = false;
   bool allow_display_toggle = true;
+  bool allow_delete = false;
   bool show_alias = false;
 };
 
 enum class PickResult {
   kSelected,
   kCanceled,
+  kDeleted,
   kError,
 };
 

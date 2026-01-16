@@ -257,6 +257,9 @@ std::string BuildHintText(const PickUiConfig& config, bool show_alias, size_t se
   if (config.allow_alias_edit) {
     parts.push_back("n: alias");
   }
+  if (config.allow_delete) {
+    parts.push_back("d: delete");
+  }
   if (config.allow_display_toggle) {
     parts.push_back(show_alias ? "Shift+Tab or S: view=alias" : "Shift+Tab or S: view=addr");
   }
@@ -440,6 +443,7 @@ PickResult RunPickTui(std::vector<PickItem>& items,
   size_t offset = 0;
   bool show_alias = config.show_alias;
   bool prompt_active = false;
+  bool delete_confirm = false;
   std::string prompt_input;
   std::string status;
   bool clear_status_on_next_input = false;
@@ -450,6 +454,9 @@ PickResult RunPickTui(std::vector<PickItem>& items,
     if (prompt_active) {
       footer_left = "alias: " + prompt_input;
       header_hint = "Alias edit: Enter save | Esc cancel";
+    } else if (delete_confirm) {
+      footer_left = "Delete: " + PickItemLabel(items[selected], show_alias);
+      header_hint = "Press Enter to delete, Esc to cancel";
     } else {
       if (!status.empty()) {
         footer_left = status;
@@ -541,6 +548,39 @@ PickResult RunPickTui(std::vector<PickItem>& items,
       clear_status_on_next_input = false;
     }
 
+    if (delete_confirm) {
+      if (c == 0x03) {
+        delete_confirm = false;
+        draw();
+        continue;
+      }
+      if (c == '\r' || c == '\n') {
+        *index = selected;
+        return PickResult::kDeleted;
+      }
+      if (c == 0x1b) {
+        char next = 0;
+        if (!ReadByte(fd, &next)) {
+          delete_confirm = false;
+          draw();
+          continue;
+        }
+        if (next != '[') {
+          delete_confirm = false;
+          draw();
+          continue;
+        }
+        char code = 0;
+        if (!ReadByte(fd, &code)) {
+          continue;
+        }
+        continue;
+      }
+      delete_confirm = false;
+      draw();
+      continue;
+    }
+
     if (c == 0x03) {
       return PickResult::kCanceled;
     }
@@ -559,6 +599,12 @@ PickResult RunPickTui(std::vector<PickItem>& items,
 
     if ((c == 'S') && config.allow_display_toggle) {
       show_alias = !show_alias;
+      draw();
+      continue;
+    }
+
+    if ((c == 'd' || c == 'D') && config.allow_delete) {
+      delete_confirm = true;
       draw();
       continue;
     }

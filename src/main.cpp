@@ -683,6 +683,7 @@ namespace
     PickUiConfig config;
     config.allow_alias_edit = true;
     config.allow_display_toggle = true;
+    config.allow_delete = true;
     config.show_alias = true;
 
     AliasUpdateFn alias_update = [&](const PickItem &item, const std::string &alias_input,
@@ -709,28 +710,47 @@ namespace
       return SetAliasForArgs(item.args, alias, out_err);
     };
 
-    std::size_t selected = 0;
-    PickResult result = RunPickTui(items, "sshtab pick (Enter select, Esc/Ctrl+C cancel)", &selected,
-                                   config, alias_update, &err);
-    if (result == PickResult::kSelected)
-    {
-      if (selected >= items.size())
+    while (true) {
+      std::size_t selected = 0;
+      PickResult result = RunPickTui(items, "sshtab pick (Enter select, d delete, Esc cancel)", &selected,
+                                     config, alias_update, &err);
+      if (result == PickResult::kSelected)
       {
-        return 1;
+        if (selected >= items.size())
+        {
+          return 1;
+        }
+        const std::string &args = items[selected].args;
+        if (HasControlChars(args))
+        {
+          return 1;
+        }
+        std::cout << args << "\n";
+        return 0;
       }
-      const std::string &args = items[selected].args;
-      if (HasControlChars(args))
+      if (result == PickResult::kDeleted)
       {
-        return 1;
+        if (selected >= items.size())
+        {
+          return 1;
+        }
+        std::string command = "ssh " + items[selected].args;
+        int removed = 0;
+        std::string del_err;
+        DeleteHistoryCommand(command, &removed, &del_err);
+        items.erase(items.begin() + static_cast<std::ptrdiff_t>(selected));
+        if (items.empty())
+        {
+          return 1;
+        }
+        continue;
       }
-      std::cout << args << "\n";
-      return 0;
+      if (result == PickResult::kError && !err.empty())
+      {
+        std::cerr << "pick failed: " << err << "\n";
+      }
+      return 1;
     }
-    if (result == PickResult::kError && !err.empty())
-    {
-      std::cerr << "pick failed: " << err << "\n";
-    }
-    return 1;
   }
 
   int CommandPickCommand(int argc, char **argv)
@@ -901,6 +921,7 @@ namespace
     PickUiConfig config;
     config.allow_alias_edit = true;
     config.allow_display_toggle = true;
+    config.allow_delete = true;
     config.show_alias = true;
 
     AliasUpdateFn alias_update = [&](const PickItem &item, const std::string &alias_input,
@@ -927,29 +948,49 @@ namespace
       return SetAliasForCommand(item.args, alias, out_err);
     };
 
-    std::string err;
-    std::size_t selected = 0;
-    PickResult result = RunPickTui(items, "sshtab pick-command (Enter select, Esc/Ctrl+C cancel)",
-                                   &selected, config, alias_update, &err);
-    if (result == PickResult::kSelected)
-    {
-      if (selected >= items.size())
+    while (true) {
+      std::string err;
+      std::size_t selected = 0;
+      PickResult result = RunPickTui(items, "sshtab pick-command (Enter select, d delete, Esc cancel)",
+                                     &selected, config, alias_update, &err);
+      if (result == PickResult::kSelected)
       {
-        return 1;
+        if (selected >= items.size())
+        {
+          return 1;
+        }
+        const std::string &command = items[selected].args;
+        if (HasControlChars(command) || ContainsForbiddenMetachars(command))
+        {
+          return 1;
+        }
+        std::cout << command << "\n";
+        return 0;
       }
-      const std::string &command = items[selected].args;
-      if (HasControlChars(command) || ContainsForbiddenMetachars(command))
+      if (result == PickResult::kDeleted)
       {
-        return 1;
+        if (selected >= items.size())
+        {
+          return 1;
+        }
+        std::string command = items[selected].args;
+        int removed = 0;
+        std::string del_err;
+        DeleteCommandHistory(command, &removed, &del_err);
+        DeleteHistoryCommand(command, &removed, &del_err);
+        items.erase(items.begin() + static_cast<std::ptrdiff_t>(selected));
+        if (items.empty())
+        {
+          return 1;
+        }
+        continue;
       }
-      std::cout << command << "\n";
-      return 0;
+      if (result == PickResult::kError && !err.empty())
+      {
+        std::cerr << "pick-command failed: " << err << "\n";
+      }
+      return 1;
     }
-    if (result == PickResult::kError && !err.empty())
-    {
-      std::cerr << "pick-command failed: " << err << "\n";
-    }
-    return 1;
   }
 
   int CommandAlias(int argc, char **argv)

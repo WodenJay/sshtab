@@ -362,3 +362,121 @@ bool DeleteHistoryCommand(const std::string& command, int* removed, std::string*
   }
   return true;
 }
+
+bool DeleteCommandHistory(const std::string& command, int* removed, std::string* err) {
+  if (removed) {
+    *removed = 0;
+  }
+
+  std::string path_err;
+  std::string path = GetCommandHistoryPath(&path_err);
+  if (path.empty()) {
+    if (err) {
+      *err = path_err;
+    }
+    return false;
+  }
+
+  int fd = open(path.c_str(), O_RDWR | O_CLOEXEC);
+  if (fd < 0) {
+    if (errno == ENOENT) {
+      if (err) {
+        *err = "entry not found";
+      }
+      return false;
+    }
+    if (err) {
+      *err = std::string("open failed: ") + std::strerror(errno);
+    }
+    return false;
+  }
+
+  ScopedFd fd_guard(fd);
+  FlockGuard lock(fd);
+  if (!lock.LockExclusive(err)) {
+    return false;
+  }
+
+  std::string content;
+  if (!ReadAllFromFd(fd, &content, err)) {
+    return false;
+  }
+
+  std::string dir = DirnameFromPath(path);
+  std::string tmp_path;
+  ScopedFd tmp_guard;
+  {
+    std::string tmpl = dir + "/commands.log.tmp.XXXXXX";
+    std::vector<char> tmp_buf(tmpl.begin(), tmpl.end());
+    tmp_buf.push_back('\0');
+    int tmp_fd = mkstemp(tmp_buf.data());
+    if (tmp_fd < 0) {
+      if (err) {
+        *err = std::string("mkstemp failed: ") + std::strerror(errno);
+      }
+      return false;
+    }
+    tmp_path = tmp_buf.data();
+    tmp_guard.reset(tmp_fd);
+  }
+
+  int removed_count = 0;
+  std::istringstream in(content);
+  std::string line;
+  while (std::getline(in, line)) {
+    bool drop = false;
+    size_t t1 = line.find('\t');
+    size_t t2 = t1 == std::string::npos ? std::string::npos : line.find('\t', t1 + 1);
+    if (t1 != std::string::npos && t2 != std::string::npos) {
+      std::string b64 = line.substr(t2 + 1);
+      std::string decoded;
+      std::string decode_err;
+      if (Base64Decode(b64, &decoded, &decode_err) && decoded == command) {
+        drop = true;
+        ++removed_count;
+      }
+    }
+
+    if (!drop) {
+      std::string out_line = line + "\n";
+      if (!WriteAllToFd(tmp_guard.get(), out_line, err)) {
+        unlink(tmp_path.c_str());
+        return false;
+      }
+    }
+  }
+
+  if (removed_count == 0) {
+    if (err) {
+      *err = "entry not found";
+    }
+    unlink(tmp_path.c_str());
+    return false;
+  }
+
+  if (fsync(tmp_guard.get()) != 0) {
+    if (err) {
+      *err = std::string("fsync failed: ") + std::strerror(errno);
+    }
+    unlink(tmp_path.c_str());
+    return false;
+  }
+
+  if (rename(tmp_path.c_str(), path.c_str()) != 0) {
+    if (err) {
+      *err = std::string("rename failed: ") + std::strerror(errno);
+    }
+    unlink(tmp_path.c_str());
+    return false;
+  }
+
+  if (!FsyncDir(dir, err)) {
+    return false;
+  }
+
+  if (removed) {
+    *removed = removed_count;
+  }
+  return true;
+}
+

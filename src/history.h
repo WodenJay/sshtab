@@ -15,3 +15,4 @@ bool AppendCommandHistory(const std::string& command, int exit_code, std::string
 std::vector<HistoryEntry> LoadRecentUnique(std::size_t limit, std::string* err);
 std::vector<HistoryEntry> LoadRecentUniqueCommands(std::size_t limit, std::string* err);
 bool DeleteHistoryCommand(const std::string& command, int* removed, std::string* err);
+bool DeleteCommandHistory(const std::string& command, int* removed, std::string* err);
